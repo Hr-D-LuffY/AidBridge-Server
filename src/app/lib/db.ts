@@ -3,9 +3,9 @@ import { config } from '../config'
 
 const SERVER_SELECTION_TIMEOUT_MS = 10_000
 
-// Mongoose strips query operators ($ne, $gt, ...) from user-supplied filter values. Zod validation
-// is the first line of defence; this is the backstop if a raw object ever reaches a query.
-mongoose.set('sanitizeFilter', true)
+// NoSQL-injection defence is Zod validation on every input plus never putting a raw req value into
+// a filter. Mongoose's global `sanitizeFilter` is deliberately NOT enabled: it rewrites every
+// nested `$` operator (`$in`, `$gt`, `$near`) and breaks our own server-built queries.
 
 export const connectDB = async () => {
   await mongoose.connect(config.mongoUri, {
