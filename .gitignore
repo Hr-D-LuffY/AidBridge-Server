@@ -1,0 +1,16 @@
+node_modules
+dist
+
+# Keep environment variables out of version control
+.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# AI-tool local state and project notes (not uploaded)
+/.claude
+/.agents
+AGENTS.md
+CLAUDE.md
+/docs
