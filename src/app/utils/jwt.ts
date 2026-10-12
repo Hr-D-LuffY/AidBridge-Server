@@ -2,11 +2,12 @@ import jwt, { type SignOptions } from 'jsonwebtoken'
 import { z } from 'zod'
 import { config } from '../config'
 import { Role } from '../constants/role'
+import { objectIdSchema } from './validation'
 
 const JWT_ALGORITHM = 'HS256'
 
 export const tokenPayloadSchema = z.object({
-  id: z.string(),
+  id: objectIdSchema,
   role: z.enum(Role),
 })
 

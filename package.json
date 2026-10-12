@@ -12,12 +12,14 @@
     "format:check": "biome format ./src",
     "format:fix": "biome format --write ./src",
     "lint:check": "biome lint ./src",
-    "lint:fix": "biome lint --write ./src"
+    "lint:fix": "biome lint --write ./src",
+    "seed": "tsx scripts/seed.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -26,6 +28,7 @@
     "http-status": "^2.1.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.11.1",
+    "nodemailer": "^10.1.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -34,6 +37,7 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.6.2",
+    "@types/nodemailer": "^8.0.2",
     "tsup": "^8.5.1",
     "tsx": "^4.23.14",
     "typescript": "^7.0.2"

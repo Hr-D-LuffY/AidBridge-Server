@@ -5,7 +5,10 @@ import httpStatus from 'http-status'
 import { config } from './app/config'
 import { globalErrorHandler } from './app/middleware/globalErrorHandler'
 import { notFound } from './app/middleware/notFound'
-import { generalLimiter } from './app/middleware/rateLimiter'
+import { authLimiter, generalLimiter } from './app/middleware/rateLimiter'
+import { AuthRoutes } from './app/module/auth/auth.route'
+import { UserRoutes } from './app/module/user/user.route'
+import { VolunteerRequestRoutes } from './app/module/volunteer-request/volunteer-request.route'
 import { sendResponse } from './app/utils/sendResponse'
 
 const JSON_BODY_LIMIT = '1mb'
@@ -40,8 +43,9 @@ app.get('/api/v1/health', (_req: Request, res: Response) => {
 
 app.use('/api/v1', generalLimiter)
 
-// Module routes are mounted here as each module is added, e.g.:
-//   app.use('/api/v1/auth', authLimiter, AuthRoutes)
+app.use('/api/v1/auth', authLimiter, AuthRoutes)
+app.use('/api/v1/users', UserRoutes)
+app.use('/api/v1/volunteer-requests', VolunteerRequestRoutes)
 
 app.use(notFound)
 app.use(globalErrorHandler)
