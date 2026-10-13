@@ -7,6 +7,8 @@ import { globalErrorHandler } from './app/middleware/globalErrorHandler'
 import { notFound } from './app/middleware/notFound'
 import { authLimiter, generalLimiter } from './app/middleware/rateLimiter'
 import { AuthRoutes } from './app/module/auth/auth.route'
+import { CampRoutes } from './app/module/camp/camp.route'
+import { InventoryRoutes } from './app/module/inventory/inventory.route'
 import { MessageRoutes } from './app/module/message/message.route'
 import { SosRoutes } from './app/module/sos/sos.route'
 import { TaskRoutes } from './app/module/task/task.route'
@@ -52,6 +54,8 @@ app.use('/api/v1/volunteer-requests', VolunteerRequestRoutes)
 app.use('/api/v1/sos/:sosId/messages', MessageRoutes)
 app.use('/api/v1/sos', SosRoutes)
 app.use('/api/v1/tasks', TaskRoutes)
+app.use('/api/v1/inventory', InventoryRoutes)
+app.use('/api/v1/camps', CampRoutes)
 
 app.use(notFound)
 app.use(globalErrorHandler)

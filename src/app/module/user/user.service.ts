@@ -77,6 +77,10 @@ const getUserById = async (viewer: TokenPayload, id: string) => {
   return toUserView(viewer, user)
 }
 
+// For modules that hand out work to volunteers (camps): is this id a live volunteer account?
+const isActiveVolunteer = async (id: string) =>
+  (await User.exists({ _id: id, role: Role.VOLUNTEER, isDeleted: false })) !== null
+
 // Admin-only. The only way an NGO or another admin account comes into existence (the very first
 // admin is created by the seed script). Returns the new profile but no token: the admin hands the
 // credentials over and the new user logs in themselves.
@@ -126,4 +130,10 @@ const recordRating = async (volunteerId: string, score: number, session: ClientS
   return { reliabilityScore: volunteer.reliabilityScore, totalRatings: volunteer.totalRatings }
 }
 
-export const UserService = { listUsers, getUserById, createAccount, recordRating }
+export const UserService = {
+  listUsers,
+  getUserById,
+  createAccount,
+  recordRating,
+  isActiveVolunteer,
+}

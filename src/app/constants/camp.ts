@@ -1,0 +1,4 @@
+export const MAX_CAMP_CAPACITY = 1_000_000
+export const MIN_CAMP_NAME_LENGTH = 2
+export const MAX_CAMP_NAME_LENGTH = 100
+export const MAX_CAMP_ADDRESS_LENGTH = 300
