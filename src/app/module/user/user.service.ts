@@ -1,6 +1,7 @@
 import httpStatus from 'http-status'
 import type { QueryFilter } from 'mongoose'
 import type { ClientSession } from 'mongoose'
+import { ALL_ROLES_TARGET, type NotificationTarget } from '../../constants/notification'
 import { Role } from '../../constants/role'
 import { AppError } from '../../errorHelpers/AppError'
 import { buildMeta, getPagination } from '../../utils/pagination'
@@ -136,7 +137,19 @@ const getDisplayName = async (id: string) => {
   return user?.name ?? null
 }
 
+// Email addresses of the active accounts in the given roles, or of everyone when the target is
+// 'all'. Used by the emergency broadcast; only the addresses leave this function.
+const listEmailsForTargets = async (targets: readonly NotificationTarget[]) => {
+  const filter: QueryFilter<UserDocument> = { isDeleted: false }
+  if (!targets.includes(ALL_ROLES_TARGET)) {
+    filter.role = { $in: targets.filter((target): target is Role => target !== ALL_ROLES_TARGET) }
+  }
+  const users = await User.find(filter).select('email').lean()
+  return users.map((user) => user.email)
+}
+
 export const UserService = {
+  listEmailsForTargets,
   getDisplayName,
   listUsers,
   getUserById,

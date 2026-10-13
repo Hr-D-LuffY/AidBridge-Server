@@ -25,6 +25,7 @@ import { runInTransaction } from '../../lib/transaction'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { assertTransition } from '../../utils/transitions'
+import { NotificationService } from '../notification/notification.service'
 import { TaskService } from '../task/task.service'
 import type {
   CreateSosPayload,
@@ -275,7 +276,13 @@ const updateSos = async (victimId: string, id: string, payload: UpdateSosPayload
   // never a broken link.
   await Promise.all(removed.map(deleteMedia))
 
-  // TODO(commit 8): notify the assigned volunteer that the victim changed the request.
+  if (existing.assignedVolunteer) {
+    await NotificationService.notifyUser(
+      String(existing.assignedVolunteer),
+      'SOS request updated',
+      'The victim changed an SOS request you are working on. Open it to see the latest details.',
+    )
+  }
 
   return getFullView(id)
 }
@@ -357,7 +364,13 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
     await TaskService.cancelOpenTasks(session, id, payload.resolveReason)
   })
 
-  // TODO(commit 8): notify the assigned volunteer that the victim resolved the request.
+  if (existing.assignedVolunteer) {
+    await NotificationService.notifyUser(
+      String(existing.assignedVolunteer),
+      'SOS request closed',
+      `The victim closed an SOS request you were working on: ${payload.resolveReason}`,
+    )
+  }
 
   return getFullView(id)
 }

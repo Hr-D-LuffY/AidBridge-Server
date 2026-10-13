@@ -50,7 +50,6 @@ const approveRequest = catchAsync(async (req, res) => {
   const payload = reviewVolunteerRequestSchema.parse(req.body ?? {})
   const request = await VolunteerRequestService.approveRequest(getAuthUser(req).id, id, payload)
 
-  // TODO(commit 8): notify the applicant that they are now a volunteer.
   sendResponse(res, {
     statusCode: httpStatus.OK,
     message: 'Volunteer request approved. The user is now a volunteer',
@@ -63,7 +62,6 @@ const rejectRequest = catchAsync(async (req, res) => {
   const payload = reviewVolunteerRequestSchema.parse(req.body ?? {})
   const request = await VolunteerRequestService.rejectRequest(getAuthUser(req).id, id, payload)
 
-  // TODO(commit 8): notify the applicant of the decision.
   sendResponse(res, {
     statusCode: httpStatus.OK,
     message: 'Volunteer request rejected',

@@ -4,6 +4,7 @@ import { Role } from '../../constants/role'
 import { VolunteerRequestStatus } from '../../constants/volunteerRequest'
 import { AppError } from '../../errorHelpers/AppError'
 import { buildMeta, getPagination } from '../../utils/pagination'
+import { NotificationService } from '../notification/notification.service'
 import { User } from '../user/user.model'
 import type {
   CreateVolunteerRequestPayload,
@@ -56,6 +57,9 @@ const toRequestView = (request: RequestFields, user?: PopulatedUser) => ({
   createdAt: request.createdAt,
   updatedAt: request.updatedAt,
 })
+
+// The admin's optional note, ready to append to a sentence.
+const noteSuffix = (note?: string) => (note ? ` Note from the admin: ${note}` : '')
 
 const createRequest = async (userId: string, payload: CreateVolunteerRequestPayload) => {
   const user = await User.findOne({ _id: userId, isDeleted: false })
@@ -136,7 +140,7 @@ const approveRequest = async (
 ) => {
   const session = await mongoose.startSession()
   try {
-    let approved: VolunteerRequestDocument | null = null
+    let approved = null as VolunteerRequestDocument | null
 
     await session.withTransaction(async () => {
       const request = await VolunteerRequest.findOneAndUpdate(
@@ -170,6 +174,12 @@ const approveRequest = async (
     })
 
     if (!approved) throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Approval did not complete')
+
+    await NotificationService.notifyUser(
+      String(approved.user),
+      'Volunteer request approved',
+      `You are now a volunteer.${noteSuffix(payload.note)}`,
+    )
     return toRequestView(approved)
   } finally {
     await session.endSession()
@@ -194,6 +204,12 @@ const rejectRequest = async (
     { returnDocument: 'after' },
   )
   if (!request) return explainUnclaimable(requestId)
+
+  await NotificationService.notifyUser(
+    String(request.user),
+    'Volunteer request not approved',
+    `An admin reviewed your volunteer request and did not approve it.${noteSuffix(payload.note)}`,
+  )
   return toRequestView(request)
 }
 

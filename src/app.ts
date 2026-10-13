@@ -12,6 +12,7 @@ import { DistributionRoutes } from './app/module/distribution/distribution.route
 import { IncidentRoutes } from './app/module/incident/incident.route'
 import { InventoryRoutes } from './app/module/inventory/inventory.route'
 import { MessageRoutes } from './app/module/message/message.route'
+import { NotificationRoutes } from './app/module/notification/notification.route'
 import { SosRoutes } from './app/module/sos/sos.route'
 import { TaskRoutes } from './app/module/task/task.route'
 import { UserRoutes } from './app/module/user/user.route'
@@ -60,6 +61,7 @@ app.use('/api/v1/inventory', InventoryRoutes)
 app.use('/api/v1/camps', CampRoutes)
 app.use('/api/v1/distribution', DistributionRoutes)
 app.use('/api/v1/incidents', IncidentRoutes)
+app.use('/api/v1/notifications', NotificationRoutes)
 
 app.use(notFound)
 app.use(globalErrorHandler)
