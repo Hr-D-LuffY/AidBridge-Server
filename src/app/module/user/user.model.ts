@@ -1,9 +1,9 @@
 import { Schema, model } from 'mongoose'
 import { Role } from '../../constants/role'
+import { MAX_RATING } from '../../constants/task'
 import { geoPointSchema } from '../../lib/geoPointSchema'
 
 const ROLE_VALUES: Role[] = Object.values(Role)
-const MAX_RATING = 5
 const DEFAULT_RELIABILITY_SCORE = 5
 
 const userSchema = new Schema(
@@ -19,7 +19,10 @@ const userSchema = new Schema(
     // (the old model defaulted to [0, 0], a point in the Atlantic that every such user shared).
     location: { type: geoPointSchema, default: undefined },
     reliabilityScore: { type: Number, default: DEFAULT_RELIABILITY_SCORE, min: 0, max: MAX_RATING },
+    // reliabilityScore is ratingSum / totalRatings, kept in step by UserService.recordRating. The sum
+    // is stored so the average is recomputed exactly each time instead of drifting through rounding.
     totalRatings: { type: Number, default: 0, min: 0 },
+    ratingSum: { type: Number, default: 0, min: 0 },
     // Tokens issued before this moment are rejected by auth().
     passwordChangedAt: { type: Date },
     // Hashed reset token + expiry, set by forgot-password and cleared by reset-password.

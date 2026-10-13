@@ -7,6 +7,7 @@ import { sendMail } from '../../lib/mailer'
 import { signAccessToken } from '../../utils/jwt'
 import { comparePassword, hashPassword } from '../../utils/password'
 import { generateResetToken, hashToken } from '../../utils/resetToken'
+import { SosService } from '../sos/sos.service'
 import { User, type UserDocument } from '../user/user.model'
 import { toFullProfile } from '../user/user.service'
 import type {
@@ -144,15 +145,24 @@ const updateMe = async (userId: string, payload: UpdateMePayload) => {
   const user = await User.findOneAndUpdate(
     { _id: userId, isDeleted: false },
     { $set: { name, phone, isAvailable, location: location && toGeoPoint(location) } },
-    { new: true, runValidators: true },
+    { returnDocument: 'after', runValidators: true },
   )
   if (!user) throw new AppError(httpStatus.NOT_FOUND, 'User not found')
 
   return toFullProfile(user)
 }
 
-// TODO(commit 5): refuse while the user has an open SOS request or an active task.
+// Refused while the user is a party to an unfinished SOS request: their own open request as a
+// victim, or the one they are assigned to as a volunteer. Leaving it hanging would strand the other
+// person.
 const deleteMe = async (userId: string) => {
+  if (await SosService.hasUnfinishedRequests(userId)) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      'Finish or resolve your open SOS requests before deleting your account',
+    )
+  }
+
   const result = await User.updateOne(
     { _id: userId, isDeleted: false },
     { $set: { isDeleted: true, deletedAt: new Date() } },

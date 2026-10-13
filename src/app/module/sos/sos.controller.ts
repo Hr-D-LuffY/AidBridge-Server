@@ -38,7 +38,7 @@ const listSos = catchAsync(async (req, res) => {
 
 const listNearby = catchAsync(async (req, res) => {
   const query = nearbySosQuerySchema.parse(req.query)
-  const { items, meta } = await SosService.listNearby(query)
+  const { items, meta } = await SosService.listNearby(getAuthUser(req).id, query)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -96,6 +96,28 @@ const resolveSos = catchAsync(async (req, res) => {
   })
 })
 
+const acceptSos = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const result = await SosService.acceptSos(getAuthUser(req).id, id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'SOS request accepted',
+    data: result,
+  })
+})
+
+const rejectSos = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const result = await SosService.rejectSos(getAuthUser(req).id, id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: result.outcome === 'withdrawn' ? 'You backed out of this request' : 'Request declined',
+    data: result,
+  })
+})
+
 const setPriority = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const { priority } = setPrioritySchema.parse(req.body)
@@ -117,4 +139,6 @@ export const SosController = {
   addMedia,
   resolveSos,
   setPriority,
+  acceptSos,
+  rejectSos,
 }

@@ -1,5 +1,6 @@
 import httpStatus from 'http-status'
 import type { QueryFilter } from 'mongoose'
+import type { ClientSession } from 'mongoose'
 import { Role } from '../../constants/role'
 import { AppError } from '../../errorHelpers/AppError'
 import { buildMeta, getPagination } from '../../utils/pagination'
@@ -13,8 +14,8 @@ import { User, type UserDocument } from './user.model'
 //   self / admin -> full profile
 //   ngo viewing a volunteer -> + email and phone (to coordinate camp assignments)
 //   everyone else -> limited profile
-// Commit 5 adds one more rule: a victim and the volunteer assigned to their SOS can see each
-// other's phone.
+// A victim and the volunteer assigned to their SOS see each other's phone through the SOS request
+// itself (GET /sos/:id), so this view needs no special case for them.
 export const toLimitedProfile = (user: UserDocument) => ({
   id: String(user._id),
   name: user.name,
@@ -96,4 +97,33 @@ const createAccount = async (payload: CreateAccountPayload) => {
   return toFullProfile(user)
 }
 
-export const UserService = { listUsers, getUserById, createAccount }
+const RATING_DECIMALS = 2
+
+// Adds one rating to a volunteer in a single atomic update: the sum and count grow together and the
+// average is recomputed from them in the same operation, so two ratings at once can't lose one.
+// Returns null when there is no such volunteer.
+const recordRating = async (volunteerId: string, score: number, session: ClientSession) => {
+  const volunteer = await User.findOneAndUpdate(
+    { _id: volunteerId, role: Role.VOLUNTEER },
+    [
+      {
+        $set: {
+          ratingSum: { $add: [{ $ifNull: ['$ratingSum', 0] }, score] },
+          totalRatings: { $add: [{ $ifNull: ['$totalRatings', 0] }, 1] },
+        },
+      },
+      {
+        $set: {
+          reliabilityScore: {
+            $round: [{ $divide: ['$ratingSum', '$totalRatings'] }, RATING_DECIMALS],
+          },
+        },
+      },
+    ],
+    { returnDocument: 'after', session, updatePipeline: true },
+  )
+  if (!volunteer) return null
+  return { reliabilityScore: volunteer.reliabilityScore, totalRatings: volunteer.totalRatings }
+}
+
+export const UserService = { listUsers, getUserById, createAccount, recordRating }

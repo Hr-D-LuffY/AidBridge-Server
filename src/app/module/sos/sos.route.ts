@@ -20,6 +20,8 @@ router.put(
   uploadSosMedia.array('media', MAX_SOS_MEDIA_ITEMS),
   SosController.addMedia,
 )
+router.put('/:id/accept', auth(Role.VOLUNTEER), SosController.acceptSos)
+router.put('/:id/reject', auth(Role.VOLUNTEER), SosController.rejectSos)
 router.put('/:id/priority', auth(Role.ADMIN), SosController.setPriority)
 router.put('/:id/resolve', auth(Role.VICTIM), SosController.resolveSos)
 

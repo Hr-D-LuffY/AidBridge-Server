@@ -1,5 +1,5 @@
 import httpStatus from 'http-status'
-import type { QueryFilter, Types } from 'mongoose'
+import type { ClientSession, QueryFilter, Types } from 'mongoose'
 import { Role } from '../../constants/role'
 import {
   MAX_ACTIVE_SOS_PER_VICTIM,
@@ -11,6 +11,7 @@ import {
   SOS_TRANSITIONS,
   SosStatus,
 } from '../../constants/sos'
+import { type TaskProgressStatus, TaskStatus } from '../../constants/task'
 import type { Priority } from '../../constants/relief'
 import { AppError } from '../../errorHelpers/AppError'
 import {
@@ -20,9 +21,11 @@ import {
   uploadMediaBuffer,
 } from '../../lib/cloudinary'
 import { approximateCoordinates, type Coordinates, geoNearStage, toGeoPoint } from '../../lib/geo'
+import { runInTransaction } from '../../lib/transaction'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { assertTransition } from '../../utils/transitions'
+import { TaskService } from '../task/task.service'
 import type {
   CreateSosPayload,
   ListSosQuery,
@@ -44,7 +47,7 @@ interface Person {
   phone?: string | null
 }
 
-const POPULATE_PEOPLE = [
+export const SOS_PEOPLE_POPULATE = [
   { path: 'victim', select: 'name phone' },
   { path: 'assignedVolunteer', select: 'name phone' },
 ]
@@ -52,10 +55,10 @@ const POPULATE_PEOPLE = [
 // Every read that is shown to a person goes through here so victim and volunteer arrive populated.
 const findPopulated = (filter: QueryFilter<unknown>) =>
   SosRequest.findOne(filter)
-    .populate<{ victim: Person; assignedVolunteer: Person | null }>(POPULATE_PEOPLE)
+    .populate<{ victim: Person; assignedVolunteer: Person | null }>(SOS_PEOPLE_POPULATE)
     .lean()
 
-type SosRecord = NonNullable<Awaited<ReturnType<typeof findPopulated>>>
+export type SosRecord = NonNullable<Awaited<ReturnType<typeof findPopulated>>>
 
 const toPerson = (person: Person) => ({
   id: String(person._id),
@@ -101,8 +104,8 @@ interface LimitedSource {
 const firstName = (name: string) => name.split(/\s+/)[0] ?? name
 
 // What a volunteer who has not taken a pending request sees: enough to decide whether to help, but
-// no phone, no street address, no photos and only a rounded position. Once they accept it
-// (commit 5) they are the assigned volunteer and get the full view.
+// no phone, no street address, no photos and only a rounded position. Once they accept it they
+// are the assigned volunteer and get the full view.
 const toLimitedView = (sos: LimitedSource, distanceMeters?: number) => ({
   id: String(sos._id),
   victim: { name: firstName(sos.victim.name) },
@@ -185,7 +188,7 @@ const listSos = async (viewer: TokenPayload, query: ListSosQuery) => {
       .sort({ createdAt: -1, _id: -1 })
       .skip(getPagination(query).skip)
       .limit(limit)
-      .populate<{ victim: Person; assignedVolunteer: Person | null }>(POPULATE_PEOPLE)
+      .populate<{ victim: Person; assignedVolunteer: Person | null }>(SOS_PEOPLE_POPULATE)
       .lean(),
     SosRequest.countDocuments(filter),
   ])
@@ -195,15 +198,16 @@ const listSos = async (viewer: TokenPayload, query: ListSosQuery) => {
 
 // Pending requests around a point, nearest first, for a volunteer's map. Always the limited view:
 // accepting a request is what unlocks the contact details.
-const listNearby = async (query: NearbySosQuery) => {
+const listNearby = async (volunteerId: string, query: NearbySosQuery) => {
   const { page, limit } = query
 
-  // TODO(commit 5): also hide requests this volunteer already rejected (they live in Task).
+  // Requests this volunteer already declined stay out of their list.
+  const declinedIds = await TaskService.listRejectedSosIds(volunteerId)
   const [result] = await SosRequest.aggregate<{
     items: (LimitedSource & { distanceMeters: number })[]
     total: { count: number }[]
   }>([
-    geoNearStage(query, { status: SosStatus.PENDING }, DISTANCE_FIELD),
+    geoNearStage(query, { status: SosStatus.PENDING, _id: { $nin: declinedIds } }, DISTANCE_FIELD),
     {
       $facet: {
         items: [{ $skip: getPagination(query).skip }, { $limit: limit }],
@@ -335,21 +339,24 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
   const existing = await loadOwnedOpenRequest(id, victimId)
   assertTransition(SOS_TRANSITIONS, existing.status, SosStatus.CLOSED, 'SOS request')
 
-  const closed = await SosRequest.findOneAndUpdate(
-    openOwnedFilter(id, victimId),
-    {
-      $set: {
-        status: SosStatus.CLOSED,
-        resolvedBy: ResolvedBy.VICTIM,
-        resolveReason: payload.resolveReason,
-        resolvedAt: new Date(),
+  // The request closes and every unfinished task on it is cancelled, or neither happens.
+  await runInTransaction(async (session) => {
+    const closed = await SosRequest.findOneAndUpdate(
+      openOwnedFilter(id, victimId),
+      {
+        $set: {
+          status: SosStatus.CLOSED,
+          resolvedBy: ResolvedBy.VICTIM,
+          resolveReason: payload.resolveReason,
+          resolvedAt: new Date(),
+        },
       },
-    },
-    { runValidators: true },
-  )
-  if (!closed) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+      { runValidators: true, session },
+    )
+    if (!closed) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+    await TaskService.cancelOpenTasks(session, id, payload.resolveReason)
+  })
 
-  // TODO(commit 5): cancel the assigned volunteer's open Task in the same transaction as the close.
   // TODO(commit 8): notify the assigned volunteer that the victim resolved the request.
 
   return getFullView(id)
@@ -364,6 +371,134 @@ const setPriority = async (id: string, priority: Priority) => {
   if (!updated) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
   return getFullView(id)
 }
+
+// --- Volunteer side: accept, decline, progress ------------------------------------------------
+
+// Pending -> assigned for this volunteer, as one conditional update: of two volunteers accepting at
+// once, exactly one matches `status: pending`.
+const claimForVolunteer = async (session: ClientSession, id: string, volunteerId: string) => {
+  const claimed = await SosRequest.findOneAndUpdate(
+    { _id: id, status: SosStatus.PENDING },
+    { $set: { status: SosStatus.ASSIGNED, assignedVolunteer: volunteerId } },
+    { session },
+  )
+  if (!claimed) {
+    throw new AppError(httpStatus.CONFLICT, 'This SOS request is no longer waiting for a volunteer')
+  }
+}
+
+// Assigned -> pending again, only for the volunteer currently holding it.
+const releaseToPending = async (session: ClientSession, id: string, volunteerId: string) => {
+  const released = await SosRequest.findOneAndUpdate(
+    { _id: id, assignedVolunteer: volunteerId, status: SosStatus.ASSIGNED },
+    { $set: { status: SosStatus.PENDING, assignedVolunteer: null } },
+    { session },
+  )
+  if (!released) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+}
+
+// What each task progress step does to the request it belongs to.
+const REQUEST_STEP_FOR_PROGRESS: Record<TaskProgressStatus, { from: SosStatus; to: SosStatus }> = {
+  [TaskStatus.ON_THE_WAY]: { from: SosStatus.ASSIGNED, to: SosStatus.ON_THE_WAY },
+  [TaskStatus.COMPLETED]: { from: SosStatus.ON_THE_WAY, to: SosStatus.RESCUED },
+}
+
+const advanceForVolunteer = async (
+  session: ClientSession,
+  id: string,
+  volunteerId: string,
+  progress: TaskProgressStatus,
+) => {
+  const { from, to } = REQUEST_STEP_FOR_PROGRESS[progress]
+  assertTransition(SOS_TRANSITIONS, from, to, 'SOS request')
+
+  const moved = await SosRequest.findOneAndUpdate(
+    { _id: id, assignedVolunteer: volunteerId, status: from },
+    { $set: { status: to, ...(to === SosStatus.RESCUED && { resolvedAt: new Date() }) } },
+    { session },
+  )
+  if (!moved) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+}
+
+const acceptSos = async (volunteerId: string, id: string) => {
+  const sos = await SosRequest.findById(id).select('status victim').lean()
+  if (!sos) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+  if (sos.status !== SosStatus.PENDING) {
+    throw new AppError(httpStatus.CONFLICT, `Cannot accept: the request is already ${sos.status}`)
+  }
+  if ((await TaskService.getStatusFor(id, volunteerId)) === TaskStatus.REJECTED) {
+    throw new AppError(httpStatus.CONFLICT, 'You declined this request earlier')
+  }
+  await TaskService.assertCanTakeAnotherTask(volunteerId)
+
+  // Claiming the request and creating the task stand or fall together.
+  const taskId = await runInTransaction(async (session) => {
+    await claimForVolunteer(session, id, volunteerId)
+    return TaskService.createAccepted(session, {
+      sosRequest: id,
+      volunteer: volunteerId,
+      victim: String(sos.victim),
+    })
+  })
+
+  const [sosRequest, task] = await Promise.all([getFullView(id), TaskService.getView(taskId)])
+  return { sosRequest, task }
+}
+
+// Two meanings, depending on who asks. Someone who has not taken the request just hides it from
+// their own list. The volunteer who holds it backs out: it goes back to pending for others, but
+// only before they set off.
+const rejectSos = async (volunteerId: string, id: string) => {
+  const sos = await SosRequest.findById(id).select('status victim assignedVolunteer').lean()
+  if (!sos) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+
+  if (sos.assignedVolunteer && String(sos.assignedVolunteer) === volunteerId) {
+    if (sos.status !== SosStatus.ASSIGNED) {
+      throw new AppError(
+        httpStatus.CONFLICT,
+        `You can no longer back out: the request is ${sos.status}`,
+      )
+    }
+    await runInTransaction(async (session) => {
+      await releaseToPending(session, id, volunteerId)
+      await TaskService.withdrawAccepted(session, id, volunteerId)
+    })
+    return { sosRequestId: id, outcome: 'withdrawn' as const }
+  }
+
+  if (sos.status !== SosStatus.PENDING) {
+    throw new AppError(httpStatus.CONFLICT, `Cannot decline: the request is already ${sos.status}`)
+  }
+  await TaskService.recordRejection({
+    sosRequest: id,
+    volunteer: volunteerId,
+    victim: String(sos.victim),
+  })
+  return { sosRequestId: id, outcome: 'declined' as const }
+}
+
+// --- Questions other modules ask ---------------------------------------------------------------
+
+const viewForTask = (sos: SosRecord, contactVisible: boolean) =>
+  contactVisible ? toFullView(sos) : toLimitedView(sos)
+
+// Who is in the conversation about a request (used by the chat).
+const getParticipants = async (id: string) => {
+  const sos = await SosRequest.findById(id).select('victim assignedVolunteer status').lean()
+  if (!sos) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+  return {
+    victimId: String(sos.victim),
+    assignedVolunteerId: sos.assignedVolunteer ? String(sos.assignedVolunteer) : null,
+    status: sos.status,
+  }
+}
+
+// True while the user has a request that is not rescued/closed, as its victim or its volunteer.
+const hasUnfinishedRequests = async (userId: string) =>
+  (await SosRequest.exists({
+    $or: [{ victim: userId }, { assignedVolunteer: userId }],
+    status: { $nin: [...SOS_FINISHED_STATUSES] },
+  })) !== null
 
 const getFullView = async (id: string) => {
   const sos = await findPopulated({ _id: id })
@@ -380,4 +515,11 @@ export const SosService = {
   addMedia,
   resolveSos,
   setPriority,
+  acceptSos,
+  rejectSos,
+  claimForVolunteer,
+  advanceForVolunteer,
+  viewForTask,
+  getParticipants,
+  hasUnfinishedRequests,
 }

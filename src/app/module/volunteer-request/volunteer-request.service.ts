@@ -149,7 +149,7 @@ const approveRequest = async (
             reviewNote: payload.note,
           },
         },
-        { new: true, session },
+        { returnDocument: 'after', session },
       )
       if (!request) return explainUnclaimable(requestId)
 
@@ -191,7 +191,7 @@ const rejectRequest = async (
         reviewNote: payload.note,
       },
     },
-    { new: true },
+    { returnDocument: 'after' },
   )
   if (!request) return explainUnclaimable(requestId)
   return toRequestView(request)
