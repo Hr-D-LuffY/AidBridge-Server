@@ -6,6 +6,7 @@ const DEFAULT_BCRYPT_SALT_ROUNDS = 10
 const DEFAULT_JWT_EXPIRES_IN = '7d'
 const MIN_SECRET_LENGTH = 32
 const PLACEHOLDER_PREFIX = 'replace-with'
+const CLOUDINARY_URL_PREFIX = 'cloudinary://'
 
 const secret = (name: string) =>
   z
@@ -35,6 +36,15 @@ const envSchema = z
     CLIENT_URL: z.url('CLIENT_URL must be a valid URL'),
     EMAIL_USER: z.string().min(1).optional(),
     EMAIL_PASS: z.string().min(1).optional(),
+    // cloudinary://<api_key>:<api_secret>@<cloud_name>. Optional so the rest of the API runs without
+    // it in development (media uploads answer 503); production refuses to start without it.
+    CLOUDINARY_URL: z
+      .string()
+      .refine(
+        (value) => value.startsWith(CLOUDINARY_URL_PREFIX),
+        `CLOUDINARY_URL must start with ${CLOUDINARY_URL_PREFIX}`,
+      )
+      .optional(),
     // Only read by the seed script that creates the very first admin; the server never needs them.
     ADMIN_NAME: z.string().min(1).optional(),
     ADMIN_EMAIL: z.string().min(1).optional(),
@@ -47,9 +57,18 @@ const envSchema = z
     const missing = EMAIL_VARS.filter((name) => !env[name])
     const partlySet = missing.length > 0 && missing.length < EMAIL_VARS.length
     const requiredHere = env.NODE_ENV === 'production' && missing.length > 0
-    if (!partlySet && !requiredHere) return
-    for (const name of missing) {
-      ctx.addIssue({ code: 'custom', path: [name], message: `${name} is required for email` })
+    if (partlySet || requiredHere) {
+      for (const name of missing) {
+        ctx.addIssue({ code: 'custom', path: [name], message: `${name} is required for email` })
+      }
+    }
+
+    if (env.NODE_ENV === 'production' && !env.CLOUDINARY_URL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['CLOUDINARY_URL'],
+        message: 'CLOUDINARY_URL is required in production',
+      })
     }
   })
 
@@ -78,6 +97,7 @@ export const config = {
   },
   bcryptSaltRounds: env.BCRYPT_SALT_ROUNDS,
   clientUrl: env.CLIENT_URL,
+  cloudinaryUrl: env.CLOUDINARY_URL,
   admin: {
     name: env.ADMIN_NAME ?? 'Admin',
     email: env.ADMIN_EMAIL,

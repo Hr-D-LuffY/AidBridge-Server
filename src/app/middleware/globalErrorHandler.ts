@@ -2,11 +2,14 @@ import type { ErrorRequestHandler } from 'express'
 import httpStatus from 'http-status'
 import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
+import multer from 'multer'
 import { z } from 'zod'
 import { config } from '../config'
+import { MAX_SOS_MEDIA_FILE_BYTES, MAX_SOS_MEDIA_ITEMS } from '../constants/sos'
 import { AppError } from '../errorHelpers/AppError'
 
 const MONGO_DUPLICATE_KEY = 11000
+const BYTES_PER_MB = 1024 * 1024
 const SESSION_EXPIRED_MESSAGE = 'Your session has expired. Please log in again'
 const INVALID_TOKEN_MESSAGE = 'You are not authorized. Please log in again'
 const GENERIC_SERVER_ERROR_MESSAGE = 'Internal server error'
@@ -51,10 +54,19 @@ const fromDuplicateKeyError = (error: { keyValue?: Record<string, unknown> }): N
   errors: [{ fields: Object.keys(error.keyValue ?? {}) }],
 })
 
-// Multer isn't installed until the upload commit, so match its errors by name instead of
-// importing it. They carry a `code` such as LIMIT_FILE_SIZE and a readable message.
-const isMulterError = (error: unknown): error is Error =>
-  error instanceof Error && error.name === 'MulterError'
+// Multer's own wording ("Unexpected field") means little to an API caller, so the common codes get
+// a clearer message.
+const fromMulterError = (error: multer.MulterError): NormalizedError => {
+  const messages: Record<string, string> = {
+    LIMIT_FILE_SIZE: `A file is too large (max ${MAX_SOS_MEDIA_FILE_BYTES / BYTES_PER_MB} MB each)`,
+    LIMIT_UNEXPECTED_FILE: `Send at most ${MAX_SOS_MEDIA_ITEMS} files, in the "media" field`,
+  }
+  return {
+    statusCode: httpStatus.BAD_REQUEST,
+    message: messages[error.code] ?? error.message,
+    errors: [],
+  }
+}
 
 // Errors raised by Express itself (e.g. malformed JSON from body-parser) carry a 4xx statusCode.
 const isClientHttpError = (error: unknown): error is Error & { statusCode: number } =>
@@ -90,8 +102,8 @@ const normalizeError = (error: unknown): NormalizedError => {
   if (error instanceof jwt.JsonWebTokenError) {
     return { statusCode: httpStatus.UNAUTHORIZED, message: INVALID_TOKEN_MESSAGE, errors: [] }
   }
-  if (isMulterError(error)) {
-    return { statusCode: httpStatus.BAD_REQUEST, message: error.message, errors: [] }
+  if (error instanceof multer.MulterError) {
+    return fromMulterError(error)
   }
   if (isClientHttpError(error)) {
     return { statusCode: error.statusCode, message: error.message, errors: [] }

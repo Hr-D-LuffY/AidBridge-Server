@@ -1,4 +1,8 @@
+import type { PipelineStage } from 'mongoose'
 import { z } from 'zod'
+
+// About 1.1 km: coarse enough to hide a victim's exact spot, fine enough to place them on a map.
+const APPROXIMATE_COORDINATE_DECIMALS = 2
 
 const MIN_LONGITUDE = -180
 const MAX_LONGITUDE = 180
@@ -44,6 +48,29 @@ export const nearbyQueryShape = {
 }
 
 export type NearbyQuery = z.infer<z.ZodObject<typeof nearbyQueryShape>>
+
+// Rounds a point so it shows roughly where someone is without giving their exact position away.
+export const approximateCoordinates = ([lng, lat]: Coordinates): Coordinates => {
+  const factor = 10 ** APPROXIMATE_COORDINATE_DECIMALS
+  return [Math.round(lng * factor) / factor, Math.round(lat * factor) / factor]
+}
+
+// First stage of an aggregation: nearest first, with the distance in metres written to
+// `distanceField`. Use it instead of nearQuery when you need a total count or the distance —
+// countDocuments() rejects $near. Must be the first stage, and needs the 2dsphere index.
+export const geoNearStage = (
+  { lng, lat, radius }: NearbyQuery,
+  query: Record<string, unknown>,
+  distanceField: string,
+): PipelineStage.GeoNear => ({
+  $geoNear: {
+    near: toGeoPoint([lng, lat]),
+    distanceField,
+    maxDistance: radius,
+    spherical: true,
+    query,
+  },
+})
 
 // Filter value for a 2dsphere field, nearest first:
 //   Model.find({ location: nearQuery(query), status: 'pending' })

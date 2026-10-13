@@ -20,3 +20,38 @@ export const SOS_TRANSITIONS: Record<SosStatus, readonly SosStatus[]> = {
 
 // Statuses in which the victim can no longer edit the request or add media / messages.
 export const SOS_FINISHED_STATUSES: readonly SosStatus[] = [SosStatus.RESCUED, SosStatus.CLOSED]
+
+// Who closed a request. Only the victim can today; `admin` is reserved for staff-closed requests.
+export const ResolvedBy = {
+  VICTIM: 'victim',
+  ADMIN: 'admin',
+} as const
+
+export type ResolvedBy = (typeof ResolvedBy)[keyof typeof ResolvedBy]
+
+export const MediaType = {
+  IMAGE: 'image',
+  VIDEO: 'video',
+} as const
+
+export type MediaType = (typeof MediaType)[keyof typeof MediaType]
+
+// A victim can have this many unfinished requests at once (stops spam; closing one frees a slot).
+export const MAX_ACTIVE_SOS_PER_VICTIM = 3
+
+export const MAX_SOS_DESCRIPTION_LENGTH = 1000
+export const MAX_SOS_ADDRESS_LENGTH = 300
+export const MAX_SOS_RESOLVE_REASON_LENGTH = 500
+
+// Uploads. Allowed MIME type -> the file format Cloudinary checks the real content against.
+export const MAX_SOS_MEDIA_ITEMS = 5
+export const MAX_SOS_MEDIA_FILE_BYTES = 10 * 1024 * 1024
+export const SOS_MEDIA_FORMATS = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/x-msvideo': 'avi',
+} as const
+export const SOS_MEDIA_FOLDER = 'aidbridge/sos'

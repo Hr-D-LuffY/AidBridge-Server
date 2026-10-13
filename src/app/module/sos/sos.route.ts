@@ -1,0 +1,29 @@
+import { Router } from 'express'
+import { MAX_SOS_MEDIA_ITEMS } from '../../constants/sos'
+import { Role } from '../../constants/role'
+import { auth } from '../../middleware/checkAuth'
+import { uploadSosMedia } from '../../middleware/upload'
+import { SosController } from './sos.controller'
+
+const router = Router()
+
+// `/nearby` is declared before `/:id` or "nearby" would be read as an id.
+router.get('/nearby', auth(Role.VOLUNTEER, Role.ADMIN), SosController.listNearby)
+
+router.get('/', auth(), SosController.listSos)
+router.post('/', auth(Role.VICTIM), SosController.createSos)
+
+// auth() runs before the upload middleware so an anonymous caller's files are never parsed.
+router.put(
+  '/:id/media',
+  auth(Role.VICTIM),
+  uploadSosMedia.array('media', MAX_SOS_MEDIA_ITEMS),
+  SosController.addMedia,
+)
+router.put('/:id/priority', auth(Role.ADMIN), SosController.setPriority)
+router.put('/:id/resolve', auth(Role.VICTIM), SosController.resolveSos)
+
+router.put('/:id', auth(Role.VICTIM), SosController.updateSos)
+router.get('/:id', auth(), SosController.getSosById)
+
+export const SosRoutes = router
