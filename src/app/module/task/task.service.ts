@@ -10,6 +10,13 @@ import {
 } from '../../constants/task'
 import { AppError } from '../../errorHelpers/AppError'
 import { runInTransaction } from '../../lib/transaction'
+import {
+  MS_PER_MINUTE,
+  RESPONSE_TIME_DECIMALS,
+  UNKNOWN_VOLUNTEER_NAME,
+} from '../../constants/analytics'
+import { Collection } from '../../constants/collections'
+import { type DateRange, inRange } from '../../utils/dateRange'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { assertTransition } from '../../utils/transitions'
 import { type SosRecord, SosService, SOS_PEOPLE_POPULATE } from '../sos/sos.service'
@@ -309,7 +316,65 @@ const getActiveTask = async (taskId: string, volunteerId: string) => {
   }
 }
 
+// Average minutes from a request being raised to a volunteer accepting it, over the requests raised
+// in the range. A number, 0 when nothing was accepted (the old route sometimes sent a string).
+const averageResponseMinutes = async (range: DateRange) => {
+  const [row] = await Task.aggregate<{ averageMs: number }>([
+    { $match: { acceptedAt: { $type: 'date' } } },
+    {
+      $lookup: {
+        from: Collection.SOS_REQUESTS,
+        localField: 'sosRequest',
+        foreignField: '_id',
+        pipeline: [{ $project: { createdAt: 1 } }],
+        as: 'sos',
+      },
+    },
+    { $unwind: '$sos' },
+    { $match: inRange('sos.createdAt', range) },
+    {
+      $group: { _id: null, averageMs: { $avg: { $subtract: ['$acceptedAt', '$sos.createdAt'] } } },
+    },
+  ])
+  if (!row) return 0
+  const factor = 10 ** RESPONSE_TIME_DECIMALS
+  return Math.round((row.averageMs / MS_PER_MINUTE) * factor) / factor
+}
+
+// Volunteers with the most completed tasks (finished within the range). A volunteer whose account
+// document is gone still counts, under a placeholder name, instead of silently dropping out.
+const topVolunteersByCompleted = async (range: DateRange, limit: number) => {
+  const rows = await Task.aggregate<{ _id: Types.ObjectId; completedTasks: number; name: string }>([
+    { $match: { status: TaskStatus.COMPLETED, ...inRange('completedAt', range) } },
+    { $group: { _id: '$volunteer', completedTasks: { $sum: 1 } } },
+    { $sort: { completedTasks: -1, _id: 1 } },
+    { $limit: limit },
+    {
+      $lookup: {
+        from: Collection.USERS,
+        localField: '_id',
+        foreignField: '_id',
+        pipeline: [{ $project: { name: 1 } }],
+        as: 'user',
+      },
+    },
+    {
+      $project: {
+        completedTasks: 1,
+        name: { $ifNull: [{ $first: '$user.name' }, UNKNOWN_VOLUNTEER_NAME] },
+      },
+    },
+  ])
+  return rows.map((row) => ({
+    _id: String(row._id),
+    completedTasks: row.completedTasks,
+    name: row.name,
+  }))
+}
+
 export const TaskService = {
+  averageResponseMinutes,
+  topVolunteersByCompleted,
   getActiveTask,
   listMyTasks,
   respond,

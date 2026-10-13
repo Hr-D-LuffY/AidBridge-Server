@@ -1,4 +1,5 @@
 import { Schema, model } from 'mongoose'
+import { Collection } from '../../constants/collections'
 import { Role } from '../../constants/role'
 import { MAX_RATING } from '../../constants/task'
 import { geoPointSchema } from '../../lib/geoPointSchema'
@@ -38,6 +39,6 @@ userSchema.index({ location: '2dsphere' })
 userSchema.index({ role: 1, isDeleted: 1, name: 1 })
 userSchema.index({ passwordResetToken: 1 }, { sparse: true })
 
-export const User = model('User', userSchema)
+export const User = model('User', userSchema, Collection.USERS)
 
 export type UserDocument = InstanceType<typeof User>

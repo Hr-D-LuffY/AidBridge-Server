@@ -304,7 +304,29 @@ const getAssignedOpenCamp = async (campId: string, volunteerId: string) => {
   return camp ? { id: String(camp._id), ngo: String(camp.ngo), name: camp.name } : null
 }
 
+// Active camps for the live map, newest first. Public facts only: where, how full, who runs it.
+const listActiveForMap = async (limit: number) => {
+  const camps = await Camp.find({ isActive: true, isDeleted: false })
+    .select('ngo name location address capacity currentOccupancy')
+    .sort({ updatedAt: -1, _id: -1 })
+    .limit(limit)
+    .populate<{ ngo: { _id: Types.ObjectId; name: string } }>('ngo', 'name')
+    .lean()
+
+  return camps.map((camp) => ({
+    id: String(camp._id),
+    name: camp.name,
+    location: camp.location,
+    address: camp.address ?? null,
+    capacity: camp.capacity,
+    currentOccupancy: camp.currentOccupancy,
+    availableSpots: availableSpots(camp),
+    ngo: { id: String(camp.ngo._id), name: camp.ngo.name },
+  }))
+}
+
 export const CampService = {
+  listActiveForMap,
   getAssignedOpenCamp,
   createCamp,
   listCamps,

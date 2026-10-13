@@ -1,4 +1,5 @@
 import { Schema, model } from 'mongoose'
+import { Collection } from '../../constants/collections'
 import {
   MAX_SOS_ADDRESS_LENGTH,
   MAX_SOS_DESCRIPTION_LENGTH,
@@ -65,6 +66,6 @@ sosSchema.index({ status: 1, priority: 1, victim: 1 })
 // A victim's own list, newest first, and the active-request count.
 sosSchema.index({ victim: 1, createdAt: -1 })
 
-export const SosRequest = model('SOSRequest', sosSchema)
+export const SosRequest = model('SOSRequest', sosSchema, Collection.SOS_REQUESTS)
 
 export type SosDocument = InstanceType<typeof SosRequest>

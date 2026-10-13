@@ -7,6 +7,7 @@ import { AppError } from '../../errorHelpers/AppError'
 import { deductStock } from '../../lib/stock.service'
 import { runInTransaction } from '../../lib/transaction'
 import type { TokenPayload } from '../../utils/jwt'
+import { type DateRange, inRange } from '../../utils/dateRange'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { CampService } from '../camp/camp.service'
 import { InventoryService } from '../inventory/inventory.service'
@@ -175,4 +176,28 @@ const listDistributions = async (viewer: TokenPayload, query: ListDistributionsQ
   return { items: records.map(toDistributionView), meta: buildMeta({ page, limit }, total) }
 }
 
-export const DistributionService = { createDistribution, listDistributions }
+// Total handed out per item and unit within the range, biggest first. Two items with the same name
+// but different units (kg vs packs) stay separate rows instead of adding up to nonsense.
+const totalsByItem = async (range: DateRange, limit: number) => {
+  const rows = await Distribution.aggregate<{
+    _id: { name: string; unit: string }
+    totalDistributed: number
+  }>([
+    { $match: inRange('distributedAt', range) },
+    {
+      $group: {
+        _id: { name: '$item.itemName', unit: '$item.unit' },
+        totalDistributed: { $sum: '$item.quantity' },
+      },
+    },
+    { $sort: { totalDistributed: -1, '_id.name': 1 } },
+    { $limit: limit },
+  ])
+  return rows.map((row) => ({
+    _id: row._id.name,
+    unit: row._id.unit,
+    totalDistributed: row.totalDistributed,
+  }))
+}
+
+export const DistributionService = { createDistribution, listDistributions, totalsByItem }

@@ -4,6 +4,7 @@ import type { ClientSession } from 'mongoose'
 import { ALL_ROLES_TARGET, type NotificationTarget } from '../../constants/notification'
 import { Role } from '../../constants/role'
 import { AppError } from '../../errorHelpers/AppError'
+import { type DateRange, inRange } from '../../utils/dateRange'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { hashPassword } from '../../utils/password'
 import type { TokenPayload } from '../../utils/jwt'
@@ -148,7 +149,15 @@ const listEmailsForTargets = async (targets: readonly NotificationTarget[]) => {
   return users.map((user) => user.email)
 }
 
+const countActiveVolunteers = () => User.countDocuments({ role: Role.VOLUNTEER, isDeleted: false })
+
+// Accounts created within the range (everyone when no range is given), deleted ones excluded.
+const countRegistered = (range: DateRange) =>
+  User.countDocuments({ isDeleted: false, ...inRange('createdAt', range) })
+
 export const UserService = {
+  countActiveVolunteers,
+  countRegistered,
   listEmailsForTargets,
   getDisplayName,
   listUsers,

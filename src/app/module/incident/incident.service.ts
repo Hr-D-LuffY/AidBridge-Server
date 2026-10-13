@@ -1,7 +1,7 @@
 import httpStatus from 'http-status'
 import type { QueryFilter, Types, UpdateQuery } from 'mongoose'
 import { IncidentStatus, SosLinkAction } from '../../constants/incident'
-import type { DisasterType, Priority } from '../../constants/relief'
+import { type DisasterType, Priority } from '../../constants/relief'
 import { AppError } from '../../errorHelpers/AppError'
 import { toGeoPoint } from '../../lib/geo'
 import { buildMeta, getPagination } from '../../utils/pagination'
@@ -206,7 +206,38 @@ const deleteIncident = async (id: string) => {
   if (!deleted) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
 }
 
+// Dashboard numbers for the admin: all incidents, the ones still active, and the active ones at
+// critical priority (a resolved incident is no longer something to act on).
+const getSummary = async () => {
+  const [row] = await Incident.aggregate<{ total: number; active: number; critical: number }>([
+    { $match: NOT_DELETED },
+    {
+      $group: {
+        _id: null,
+        total: { $sum: 1 },
+        active: { $sum: { $cond: [{ $eq: ['$status', IncidentStatus.ACTIVE] }, 1, 0] } },
+        critical: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$status', IncidentStatus.ACTIVE] },
+                  { $eq: ['$priority', Priority.CRITICAL] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
+        },
+      },
+    },
+  ])
+  return { total: row?.total ?? 0, active: row?.active ?? 0, critical: row?.critical ?? 0 }
+}
+
 export const IncidentService = {
+  getSummary,
   createIncident,
   listIncidents,
   updateIncident,

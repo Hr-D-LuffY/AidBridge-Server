@@ -24,6 +24,7 @@ import { approximateCoordinates, type Coordinates, geoNearStage, toGeoPoint } fr
 import { runInTransaction } from '../../lib/transaction'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
+import { type DateRange, inRange } from '../../utils/dateRange'
 import { assertTransition } from '../../utils/transitions'
 import { NotificationService } from '../notification/notification.service'
 import { TaskService } from '../task/task.service'
@@ -536,7 +537,61 @@ const getRescuedIds = async (ids: string[]) => {
   return new Set(rescued.map((sos) => String(sos._id)))
 }
 
+interface CountRow<T extends string> {
+  _id: T
+  count: number
+}
+
+// How many requests were raised in the range, by status and by priority: one pass over the
+// collection, two groupings. Statuses nobody has are simply absent from the result.
+const countByStatusAndPriority = async (range: DateRange) => {
+  const [result] = await SosRequest.aggregate<{
+    byStatus: CountRow<SosStatus>[]
+    byPriority: CountRow<Priority>[]
+  }>([
+    { $match: inRange('createdAt', range) },
+    {
+      $facet: {
+        byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+        byPriority: [{ $group: { _id: '$priority', count: { $sum: 1 } } }],
+      },
+    },
+  ])
+  return { byStatus: result?.byStatus ?? [], byPriority: result?.byPriority ?? [] }
+}
+
+// Requests still open (not rescued / closed) for the live map, newest first. Names only, no
+// phone numbers: the map shows where help is needed, the detail screen shows who to call.
+const listOpenForMap = async (limit: number) => {
+  const requests = await SosRequest.find({ status: { $nin: [...SOS_FINISHED_STATUSES] } })
+    .select('victim assignedVolunteer needs location address priority status createdAt')
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit)
+    .populate<{ victim: { _id: Types.ObjectId; name: string } }>('victim', 'name')
+    .populate<{ assignedVolunteer: { _id: Types.ObjectId; name: string } | null }>(
+      'assignedVolunteer',
+      'name',
+    )
+    .lean()
+
+  return requests.map((sos) => ({
+    id: String(sos._id),
+    status: sos.status,
+    priority: sos.priority,
+    needs: sos.needs,
+    location: sos.location,
+    address: sos.address ?? null,
+    victim: { id: String(sos.victim._id), name: sos.victim.name },
+    assignedVolunteer: sos.assignedVolunteer
+      ? { id: String(sos.assignedVolunteer._id), name: sos.assignedVolunteer.name }
+      : null,
+    createdAt: sos.createdAt,
+  }))
+}
+
 export const SosService = {
+  countByStatusAndPriority,
+  listOpenForMap,
   getExistingIds,
   getRescuedIds,
   createSos,
