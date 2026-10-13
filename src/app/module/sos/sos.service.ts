@@ -506,7 +506,26 @@ const getFullView = async (id: string) => {
   return toFullView(sos)
 }
 
+// Which of these ids are real SOS requests (the incident module links requests by id).
+const getExistingIds = async (ids: string[]) => {
+  const found = await SosRequest.find({ _id: { $in: ids } })
+    .select('_id')
+    .lean()
+  return found.map((sos) => String(sos._id))
+}
+
+// Of these ids, the ones whose request has been rescued: one query for a whole page of incidents.
+const getRescuedIds = async (ids: string[]) => {
+  if (ids.length === 0) return new Set<string>()
+  const rescued = await SosRequest.find({ _id: { $in: ids }, status: SosStatus.RESCUED })
+    .select('_id')
+    .lean()
+  return new Set(rescued.map((sos) => String(sos._id)))
+}
+
 export const SosService = {
+  getExistingIds,
+  getRescuedIds,
   createSos,
   listSos,
   listNearby,

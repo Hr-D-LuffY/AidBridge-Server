@@ -292,7 +292,25 @@ const rateTask = async (victimId: string, taskId: string, payload: RateTaskPaylo
   return { taskId, isRated: true, volunteer: { id: String(task.volunteer), ...volunteer } }
 }
 
+// A task this volunteer is working on right now (accepted or on the way). Others may only be
+// handed out against a live task: 404 unknown, 403 someone else's, 409 not active.
+const getActiveTask = async (taskId: string, volunteerId: string) => {
+  const task = await loadOwnTask(taskId, volunteerId)
+  if (!TASK_ACTIVE_STATUSES.includes(task.status)) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      `This task is ${task.status}. Items can only be handed out for an accepted or on-the-way task`,
+    )
+  }
+  return {
+    id: String(task._id),
+    sosRequest: String(task.sosRequest),
+    victim: String(task.victim),
+  }
+}
+
 export const TaskService = {
+  getActiveTask,
   listMyTasks,
   respond,
   updateStatus,

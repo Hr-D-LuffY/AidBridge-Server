@@ -151,7 +151,17 @@ const deleteItem = async (ngoId: string, id: string) => {
   if (!deleted) throw new AppError(httpStatus.NOT_FOUND, ITEM_NOT_FOUND_MESSAGE)
 }
 
+// One item as it sits in one camp (null if it isn't there). Distribution asks this to explain why a
+// hand-out can't happen.
+const getCampItem = async (campId: string, itemId: string) => {
+  const item = await Inventory.findOne({ _id: itemId, camp: campId })
+    .select('itemName quantity unit')
+    .lean()
+  return item ? { itemName: item.itemName, quantity: item.quantity, unit: item.unit } : null
+}
+
 export const InventoryService = {
+  getCampItem,
   listItems,
   listAlerts,
   createItem,

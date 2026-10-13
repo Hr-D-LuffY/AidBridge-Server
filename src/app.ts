@@ -8,6 +8,8 @@ import { notFound } from './app/middleware/notFound'
 import { authLimiter, generalLimiter } from './app/middleware/rateLimiter'
 import { AuthRoutes } from './app/module/auth/auth.route'
 import { CampRoutes } from './app/module/camp/camp.route'
+import { DistributionRoutes } from './app/module/distribution/distribution.route'
+import { IncidentRoutes } from './app/module/incident/incident.route'
 import { InventoryRoutes } from './app/module/inventory/inventory.route'
 import { MessageRoutes } from './app/module/message/message.route'
 import { SosRoutes } from './app/module/sos/sos.route'
@@ -56,6 +58,8 @@ app.use('/api/v1/sos', SosRoutes)
 app.use('/api/v1/tasks', TaskRoutes)
 app.use('/api/v1/inventory', InventoryRoutes)
 app.use('/api/v1/camps', CampRoutes)
+app.use('/api/v1/distribution', DistributionRoutes)
+app.use('/api/v1/incidents', IncidentRoutes)
 
 app.use(notFound)
 app.use(globalErrorHandler)

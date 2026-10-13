@@ -29,3 +29,18 @@ export const atLeastOneField = [
     when: (payload: { issues: readonly unknown[] }) => payload.issues.length === 0,
   },
 ] as const
+
+// An ISO date ("2026-10-13") or date-time ("2026-10-13T08:30:00Z") from the client, as a Date.
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const dateText = z.union([z.iso.datetime({ offset: true }), z.iso.date()], {
+  error: 'Must be an ISO date or date-time, e.g. 2026-10-13 or 2026-10-13T08:30:00Z',
+})
+
+export const isoDateSchema = dateText.transform((value) => new Date(value))
+
+// For the upper end of a range: a bare date means "through the end of that day".
+export const isoDateEndSchema = dateText.transform((value) => {
+  const date = new Date(value)
+  return DATE_ONLY_PATTERN.test(value) ? new Date(date.getTime() + MS_PER_DAY - 1) : date
+})

@@ -130,7 +130,14 @@ const recordRating = async (volunteerId: string, score: number, session: ClientS
   return { reliabilityScore: volunteer.reliabilityScore, totalRatings: volunteer.totalRatings }
 }
 
+// A person's name for records that keep a copy of it (a distribution notes who received the aid).
+const getDisplayName = async (id: string) => {
+  const user = await User.findById(id).select('name').lean()
+  return user?.name ?? null
+}
+
 export const UserService = {
+  getDisplayName,
   listUsers,
   getUserById,
   createAccount,

@@ -290,7 +290,22 @@ const adjustOccupancy = async (viewer: TokenPayload, id: string, change: Occupan
   return getCampView(id)
 }
 
+// The camp, if this volunteer is assigned to it and it is open (active, not deleted); else null.
+// Distribution asks this: a volunteer can only hand out stock from a camp they work at.
+const getAssignedOpenCamp = async (campId: string, volunteerId: string) => {
+  const camp = await Camp.findOne({
+    _id: campId,
+    assignedVolunteers: volunteerId,
+    isActive: true,
+    isDeleted: false,
+  })
+    .select('ngo name')
+    .lean()
+  return camp ? { id: String(camp._id), ngo: String(camp.ngo), name: camp.name } : null
+}
+
 export const CampService = {
+  getAssignedOpenCamp,
   createCamp,
   listCamps,
   listNearby,
