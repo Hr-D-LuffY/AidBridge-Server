@@ -13,7 +13,8 @@
     "format:fix": "biome format --write ./src",
     "lint:check": "biome lint ./src",
     "lint:fix": "biome lint --write ./src",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "seed:demo": "tsx scripts/seed-demo.ts"
   },
   "engines": {
     "node": ">=20"
