@@ -49,6 +49,17 @@ const listNearby = catchAsync(async (req, res) => {
   })
 })
 
+const getCamp = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const camp = await CampService.getPublicCamp(id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Camp retrieved successfully',
+    data: camp,
+  })
+})
+
 const listMyAssigned = catchAsync(async (req, res) => {
   const query = myCampsQuerySchema.parse(req.query)
   const { items, meta } = await CampService.listMyAssigned(getAuthUser(req).id, query)
@@ -124,6 +135,7 @@ export const CampController = {
   createCamp,
   listCamps,
   listNearby,
+  getCamp,
   listMyAssigned,
   updateCamp,
   deleteCamp,

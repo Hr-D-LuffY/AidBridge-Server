@@ -382,6 +382,13 @@ const CAMPS: CampSeed[] = [
   { key: 'c5', ngo: 'ngo2', name: 'Kalapara Multipurpose Cyclone Shelter', lng: 90.2377, lat: 21.9985, address: 'Kalapara, Patuakhali', capacity: 350, currentOccupancy: 305, volunteers: ['vol6'], created: ago({ d: 3 }) },
   { key: 'c6', ngo: 'ngo3', name: 'Bandarban Sadar Relief Point', lng: 92.2171, lat: 22.1932, address: 'Rajbila, Bandarban Sadar', capacity: 120, currentOccupancy: 45, volunteers: ['vol7'], created: ago({ d: 4 }) },
   { key: 'c7', ngo: 'ngo2', name: 'Chawkbazar Community Hall Camp', lng: 90.3972, lat: 23.7149, address: 'Chawkbazar, Old Dhaka', capacity: 150, currentOccupancy: 0, isActive: false, volunteers: ['vol4'], created: ago({ d: 40 }) },
+  // Dhaka, so the victim's "relief camps near you" map has something to show in the capital too.
+  { key: 'c8', ngo: 'ngo1', name: 'Dhanmondi Govt. High School Shelter', lng: 90.376, lat: 23.7465, address: 'Dhanmondi, Dhaka', capacity: 300, currentOccupancy: 142, volunteers: [], created: ago({ d: 2 }) },
+  { key: 'c9', ngo: 'ngo2', name: 'Mirpur Stadium Relief Camp', lng: 90.3631, lat: 23.8068, address: 'Mirpur-2, Dhaka', capacity: 500, currentOccupancy: 380, volunteers: [], created: ago({ d: 2 }) },
+  { key: 'c10', ngo: 'ngo3', name: 'Uttara Community Centre Shelter', lng: 90.4003, lat: 23.8741, address: 'Sector 7, Uttara, Dhaka', capacity: 200, currentOccupancy: 200, volunteers: [], created: ago({ d: 2 }) },
+  { key: 'c11', ngo: 'ngo1', name: 'Demra Flood Relief Centre', lng: 90.4953, lat: 23.7239, address: 'Demra, Dhaka', capacity: 350, currentOccupancy: 190, volunteers: [], created: ago({ d: 1 }) },
+  { key: 'c12', ngo: 'ngo2', name: 'Jatrabari Primary School Camp', lng: 90.4344, lat: 23.7104, address: 'Jatrabari, Dhaka', capacity: 180, currentOccupancy: 60, volunteers: [], created: ago({ d: 1 }) },
+  { key: 'c13', ngo: 'ngo3', name: 'Tejgaon College Field Shelter', lng: 90.3917, lat: 23.7587, address: 'Tejgaon, Dhaka', capacity: 250, currentOccupancy: 95, volunteers: [], created: ago({ d: 1 }) },
 ]
 
 interface InventorySeed {

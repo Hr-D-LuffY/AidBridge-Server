@@ -13,6 +13,9 @@ router.get('/', auth(Role.NGO, Role.ADMIN), CampController.listCamps)
 router.post('/', auth(Role.NGO), CampController.createCamp)
 
 // The owning NGO manages its camps; an admin may manage any of them.
+// One active camp as a victim sees it (the camp's own page); an admin may read it too.
+router.get('/:id', auth(Role.VICTIM, Role.ADMIN), CampController.getCamp)
+
 router.put('/:id/assign', auth(Role.NGO, Role.ADMIN), CampController.assignVolunteer)
 router.put('/:id/unassign', auth(Role.NGO, Role.ADMIN), CampController.unassignVolunteer)
 router.put('/:id/occupancy', auth(Role.NGO, Role.ADMIN), CampController.adjustOccupancy)

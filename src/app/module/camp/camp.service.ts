@@ -61,13 +61,16 @@ const toCampView = (camp: CampRecord) => ({
   updatedAt: camp.updatedAt,
 })
 
-interface NearbyRow {
+interface PublicCampRow {
   _id: Types.ObjectId
   name: string
   address?: string | null
   location: { type: string; coordinates: number[] }
   capacity: number
   currentOccupancy: number
+}
+
+interface NearbyRow extends PublicCampRow {
   distanceMeters: number
   // The camp's NGO, joined in by listNearby (name only).
   ngoAccount?: { name: string }[]
@@ -75,15 +78,19 @@ interface NearbyRow {
 
 // What a victim sees when looking for shelter: where it is, who runs it and whether there is room.
 // Nothing about the volunteers, and only the NGO's name.
-const toNearbyView = (camp: NearbyRow) => ({
+const toPublicView = (camp: PublicCampRow, ngoName: string | null) => ({
   id: String(camp._id),
   name: camp.name,
-  ngo: { name: camp.ngoAccount?.[0]?.name ?? null },
+  ngo: { name: ngoName },
   address: camp.address ?? null,
   location: camp.location,
   capacity: camp.capacity,
   currentOccupancy: camp.currentOccupancy,
   availableSpots: availableSpots(camp),
+})
+
+const toNearbyView = (camp: NearbyRow) => ({
+  ...toPublicView(camp, camp.ngoAccount?.[0]?.name ?? null),
   distanceMeters: Math.round(camp.distanceMeters),
 })
 
@@ -161,6 +168,16 @@ const listNearby = async (query: NearbyCampsQuery) => {
     items: (result?.items ?? []).map(toNearbyView),
     meta: buildMeta({ page, limit }, result?.total[0]?.count ?? 0),
   }
+}
+
+// One active camp in the same trimmed view as the nearby list (no distance): for the camp's own page.
+// A closed or deleted camp is "not found" to everyone here.
+const getPublicCamp = async (id: string) => {
+  const camp = await Camp.findOne({ _id: id, isActive: true, isDeleted: false })
+    .populate<{ ngo: { name: string } | null }>({ path: 'ngo', select: 'name' })
+    .lean()
+  if (!camp) throw new AppError(httpStatus.NOT_FOUND, CAMP_NOT_FOUND_MESSAGE)
+  return toPublicView(camp, camp.ngo?.name ?? null)
 }
 
 // The volunteer's own camps, each with what is in stock there for handing out.
@@ -347,6 +364,7 @@ export const CampService = {
   createCamp,
   listCamps,
   listNearby,
+  getPublicCamp,
   listMyAssigned,
   updateCamp,
   deleteCamp,
