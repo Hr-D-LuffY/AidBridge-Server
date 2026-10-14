@@ -239,7 +239,11 @@ const getSosById = async (viewer: TokenPayload, id: string) => {
   const isOwner = String(sos.victim._id) === viewer.id
   const isAssigned = sos.assignedVolunteer && String(sos.assignedVolunteer._id) === viewer.id
   const isStaff = viewer.role === Role.ADMIN || viewer.role === Role.NGO
-  if (isOwner || isAssigned || isStaff) return toFullView(sos)
+  // The victim also gets the volunteer's task, so the page can offer the rating without another call.
+  if (isOwner) {
+    return { ...toFullView(sos), task: await TaskService.getVictimSummary(id, viewer.id) }
+  }
+  if (isAssigned || isStaff) return toFullView(sos)
 
   if (viewer.role === Role.VOLUNTEER && sos.status === SosStatus.PENDING) {
     return toLimitedView(sos)

@@ -254,6 +254,25 @@ const updateStatus = async (volunteerId: string, taskId: string, payload: TaskSt
   return getView(taskId)
 }
 
+// The volunteer working (or who worked) a request, as its victim sees them: enough to show the rating
+// card without a second call. `null` while nobody has taken it, or after the volunteer backed out.
+const getVictimSummary = async (sosId: string, victimId: string) => {
+  const task = await Task.findOne({
+    sosRequest: sosId,
+    victim: victimId,
+    status: { $in: CONTACT_VISIBLE_STATUSES },
+  })
+    .sort({ createdAt: -1 })
+    .lean()
+  if (!task) return null
+  return {
+    id: String(task._id),
+    status: task.status,
+    isRated: task.isRated,
+    canRate: task.status === TaskStatus.COMPLETED && !task.isRated,
+  }
+}
+
 // The task's victim, while the task is completed and not yet rated (404 / 403 / 409 otherwise).
 const loadVictimTask = async (taskId: string, victimId: string) => {
   const task = await Task.findById(taskId).lean()
@@ -380,6 +399,7 @@ export const TaskService = {
   respond,
   updateStatus,
   getRatingStatus,
+  getVictimSummary,
   rateTask,
   getView,
   getStatusFor,

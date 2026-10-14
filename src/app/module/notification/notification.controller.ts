@@ -18,6 +18,16 @@ const listNotifications = catchAsync(async (req, res) => {
   })
 })
 
+const getUnreadCount = catchAsync(async (req, res) => {
+  const count = await NotificationService.countUnread(getAuthUser(req))
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Unread count retrieved successfully',
+    data: { count },
+  })
+})
+
 const createNotification = catchAsync(async (req, res) => {
   const payload = createNotificationSchema.parse(req.body)
   const notification = await NotificationService.createNotification(getAuthUser(req).id, payload)
@@ -42,4 +52,9 @@ const markRead = catchAsync(async (req, res) => {
   })
 })
 
-export const NotificationController = { listNotifications, createNotification, markRead }
+export const NotificationController = {
+  listNotifications,
+  getUnreadCount,
+  createNotification,
+  markRead,
+}

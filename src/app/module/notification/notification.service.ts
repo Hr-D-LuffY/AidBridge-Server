@@ -63,6 +63,11 @@ const listMine = async (viewer: TokenPayload, query: ListNotificationsQuery) => 
   }
 }
 
+// How many of the caller's notifications they have not opened: the number on the bell, without
+// fetching the list.
+const countUnread = (viewer: TokenPayload) =>
+  Notification.countDocuments({ ...visibleTo(viewer), readBy: { $ne: viewer.id } })
+
 // One conditional update: marks it read only if it is addressed to the caller. A notification that
 // does not exist and one meant for somebody else both answer 404, so ids can't be probed. Reading
 // twice is harmless ($addToSet).
@@ -133,4 +138,10 @@ const notifyUser = async (userId: string, title: string, message: string) => {
   }
 }
 
-export const NotificationService = { listMine, markRead, createNotification, notifyUser }
+export const NotificationService = {
+  listMine,
+  countUnread,
+  markRead,
+  createNotification,
+  notifyUser,
+}

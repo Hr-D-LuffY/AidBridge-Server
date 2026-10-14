@@ -7,6 +7,7 @@ import { changeOccupancy, listStockForCamps, unlinkCampStock } from '../../lib/s
 import { runInTransaction } from '../../lib/transaction'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
+import { User } from '../user/user.model'
 import { UserService } from '../user/user.service'
 import type {
   CreateCampPayload,
@@ -68,13 +69,16 @@ interface NearbyRow {
   capacity: number
   currentOccupancy: number
   distanceMeters: number
+  // The camp's NGO, joined in by listNearby (name only).
+  ngoAccount?: { name: string }[]
 }
 
-// What a victim sees when looking for shelter: where it is and whether there is room. Nothing about
-// the NGO or the volunteers.
+// What a victim sees when looking for shelter: where it is, who runs it and whether there is room.
+// Nothing about the volunteers, and only the NGO's name.
 const toNearbyView = (camp: NearbyRow) => ({
   id: String(camp._id),
   name: camp.name,
+  ngo: { name: camp.ngoAccount?.[0]?.name ?? null },
   address: camp.address ?? null,
   location: camp.location,
   capacity: camp.capacity,
@@ -135,7 +139,19 @@ const listNearby = async (query: NearbyCampsQuery) => {
     geoNearStage(query, { isActive: true, isDeleted: false }, DISTANCE_FIELD),
     {
       $facet: {
-        items: [{ $skip: getPagination(query).skip }, { $limit: limit }],
+        items: [
+          { $skip: getPagination(query).skip },
+          { $limit: limit },
+          {
+            $lookup: {
+              from: User.collection.name,
+              localField: 'ngo',
+              foreignField: '_id',
+              pipeline: [{ $project: { name: 1 } }],
+              as: 'ngoAccount',
+            },
+          },
+        ],
         total: [{ $count: 'count' }],
       },
     },
