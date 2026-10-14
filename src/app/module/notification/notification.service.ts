@@ -3,6 +3,8 @@ import type { QueryFilter, Types } from 'mongoose'
 import {
   BROADCAST_EMAIL_BATCH_SIZE,
   BROADCAST_EMAIL_SUBJECT_PREFIX,
+  CHAT_NOTIFICATION_TITLE_PREFIX,
+  CHAT_PREVIEW_LENGTH,
   type NotificationTarget,
 } from '../../constants/notification'
 import { AppError } from '../../errorHelpers/AppError'
@@ -21,6 +23,7 @@ interface NotificationFields {
   title: string
   message: string
   isEmergencyBroadcast: boolean
+  sosRequest?: Types.ObjectId | null
   readBy: Types.ObjectId[]
   createdAt: Date
 }
@@ -32,6 +35,7 @@ const toNotificationView = (notification: NotificationFields, viewerId: string) 
   title: notification.title,
   message: notification.message,
   isEmergencyBroadcast: notification.isEmergencyBroadcast,
+  sosRequestId: notification.sosRequest ? String(notification.sosRequest) : null,
   isRead: notification.readBy.some((reader) => String(reader) === viewerId),
   createdAt: notification.createdAt,
 })
@@ -138,10 +142,42 @@ const notifyUser = async (userId: string, title: string, message: string) => {
   }
 }
 
+const truncate = (text: string, length: number) =>
+  text.length > length ? `${text.slice(0, length - 1).trimEnd()}…` : text
+
+// Tells one person that someone wrote to them on a request. Unread messages from the same sender on
+// the same request are swapped for this newest one, so the bell counts conversations, not messages.
+// Like notifyUser, it runs after the message is saved and never fails the request.
+const notifyChatMessage = async (
+  recipientId: string,
+  senderName: string,
+  content: string,
+  sosRequestId: string,
+) => {
+  const title = `${CHAT_NOTIFICATION_TITLE_PREFIX} ${senderName}`
+  try {
+    await Notification.deleteMany({
+      targetUsers: recipientId,
+      sosRequest: sosRequestId,
+      title,
+      readBy: { $ne: recipientId },
+    })
+    await Notification.create({
+      title,
+      message: truncate(content, CHAT_PREVIEW_LENGTH),
+      targetUsers: [recipientId],
+      sosRequest: sosRequestId,
+    })
+  } catch (error) {
+    console.error(`Could not notify user ${recipientId} of a message:`, error)
+  }
+}
+
 export const NotificationService = {
   listMine,
   countUnread,
   markRead,
   createNotification,
   notifyUser,
+  notifyChatMessage,
 }

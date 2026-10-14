@@ -17,3 +17,9 @@ export const MAX_NOTIFICATION_MESSAGE_LENGTH = 2000
 export const BROADCAST_EMAIL_BATCH_SIZE = 50
 
 export const BROADCAST_EMAIL_SUBJECT_PREFIX = 'AidBridge emergency alert'
+
+// A chat message tells the other person, with who wrote and the start of what they wrote. Unread ones
+// from the same sender on the same request are replaced by the newest, so a long conversation is one
+// line on the bell, not fifty.
+export const CHAT_NOTIFICATION_TITLE_PREFIX = 'New message from'
+export const CHAT_PREVIEW_LENGTH = 100

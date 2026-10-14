@@ -23,6 +23,8 @@ const notificationSchema = new Schema(
     isEmergencyBroadcast: { type: Boolean, default: false },
     // Absent on notifications the system raises itself (a volunteer request was decided, ...).
     createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    // The request it is about, when there is one (a chat message), so a client can open it.
+    sosRequest: { type: Schema.Types.ObjectId, ref: 'SOSRequest' },
     // Who has opened it. Never sent to clients: the API answers `isRead` for the caller only.
     readBy: { type: [{ type: Schema.Types.ObjectId, ref: 'User' }], default: [] },
   },

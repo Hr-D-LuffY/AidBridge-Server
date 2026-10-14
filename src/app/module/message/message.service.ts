@@ -5,6 +5,7 @@ import { SOS_FINISHED_STATUSES } from '../../constants/sos'
 import { AppError } from '../../errorHelpers/AppError'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
+import { NotificationService } from '../notification/notification.service'
 import { SosService } from '../sos/sos.service'
 import type { ListMessagesQuery, SendMessagePayload } from './message.interface'
 import { Message } from './message.model'
@@ -84,6 +85,18 @@ const sendMessage = async (viewer: TokenPayload, sosId: string, payload: SendMes
     .populate<{ sender: Sender }>('sender', 'name role')
     .lean()
   if (!message) throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Message was not saved')
+
+  // The other person finds out without opening the request: a notification with who wrote and how it
+  // starts. The message is already saved, so this can't fail the send.
+  const recipientId = viewer.id === access.victimId ? access.assignedVolunteerId : access.victimId
+  if (recipientId) {
+    await NotificationService.notifyChatMessage(
+      recipientId,
+      message.sender.name,
+      message.content,
+      sosId,
+    )
+  }
   return toMessageView(message)
 }
 
