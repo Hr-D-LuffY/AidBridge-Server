@@ -21,6 +21,7 @@ import type {
 const RESET_TOKEN_TTL_MINUTES = 30
 const MS_PER_MINUTE = 60 * 1000
 const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password'
+const BLOCKED_MESSAGE = 'This account has been blocked. Please contact support'
 
 // A real bcrypt hash of a throwaway string. Login compares against it when the email is unknown so
 // that "no such user" takes as long as "wrong password" and response time can't be used to find out
@@ -71,6 +72,8 @@ const login = async (payload: LoginPayload) => {
   if (!user || !passwordMatches) {
     throw new AppError(httpStatus.UNAUTHORIZED, INVALID_CREDENTIALS_MESSAGE)
   }
+  // Said only after the password is right, so a wrong guess learns nothing about the account.
+  if (user.isBlocked) throw new AppError(httpStatus.FORBIDDEN, BLOCKED_MESSAGE)
 
   return buildAuthResult(user)
 }
@@ -78,7 +81,8 @@ const login = async (payload: LoginPayload) => {
 // Never says whether the email exists — the controller always answers the same way.
 const forgotPassword = async (email: string) => {
   const user = await User.findOne({ email, isDeleted: false })
-  if (!user) return
+  // A blocked account gets no link either, and the answer stays the same as for an unknown email.
+  if (!user || user.isBlocked) return
 
   const { token, hashedToken } = generateResetToken()
   await User.updateOne(

@@ -10,6 +10,7 @@ const BEARER_PREFIX = 'Bearer '
 const MS_PER_SECOND = 1000
 const UNAUTHORIZED_MESSAGE = 'You are not authorized. Please log in again'
 const FORBIDDEN_MESSAGE = 'You do not have permission to access this resource'
+const BLOCKED_MESSAGE = 'Your account has been blocked. Please contact support'
 
 const extractAccessToken = (req: Request): string | undefined => {
   const header = req.headers.authorization
@@ -36,9 +37,13 @@ export const auth = (...roles: Role[]): RequestHandler =>
     // Always re-read the user: a soft-deleted account, a changed role or a password change must take
     // effect immediately, not when the (still validly signed) token expires.
     const user = await User.findOne({ _id: verified.id, isDeleted: false }).select(
-      'role passwordChangedAt',
+      'role passwordChangedAt isBlocked',
     )
     if (!user) throw new AppError(httpStatus.UNAUTHORIZED, UNAUTHORIZED_MESSAGE)
+
+    // A block takes effect on the next request, like a deletion. It is a 401 so the client ends the
+    // session; the login that follows explains why (see AuthService.login).
+    if (user.isBlocked) throw new AppError(httpStatus.UNAUTHORIZED, BLOCKED_MESSAGE)
 
     // `iat` is in whole seconds, so compare at second precision: a token issued in the same second
     // as the password change (the fresh one handed out by change-password) is still accepted.

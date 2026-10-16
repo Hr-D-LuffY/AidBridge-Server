@@ -380,6 +380,41 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
   return getFullView(id)
 }
 
+// An admin blocked the victim: every request of theirs that is not finished is closed (as an admin
+// closing it) and the tasks on them are cancelled, so a scam request leaves the volunteers' maps at
+// once. Runs inside the caller's transaction, so the block and the closing happen together or not at
+// all. Returns the volunteers who were on those requests, for the caller to tell after it commits.
+const closeUnfinishedForVictim = async (
+  session: ClientSession,
+  victimId: string,
+  reason: string,
+) => {
+  const open = await SosRequest.find({
+    victim: victimId,
+    status: { $nin: [...SOS_FINISHED_STATUSES] },
+  })
+    .select('_id assignedVolunteer')
+    .session(session)
+    .lean()
+  if (open.length === 0) return []
+
+  await SosRequest.updateMany(
+    { _id: { $in: open.map((sos) => sos._id) } },
+    {
+      $set: {
+        status: SosStatus.CLOSED,
+        resolvedBy: ResolvedBy.ADMIN,
+        resolveReason: reason,
+        resolvedAt: new Date(),
+      },
+    },
+    { session },
+  )
+  for (const sos of open) await TaskService.cancelOpenTasks(session, String(sos._id), reason)
+
+  return open.flatMap((sos) => (sos.assignedVolunteer ? [String(sos.assignedVolunteer)] : []))
+}
+
 const setPriority = async (id: string, priority: Priority) => {
   const updated = await SosRequest.findByIdAndUpdate(
     id,
@@ -605,6 +640,7 @@ export const SosService = {
   updateSos,
   addMedia,
   resolveSos,
+  closeUnfinishedForVictim,
   setPriority,
   acceptSos,
   rejectSos,

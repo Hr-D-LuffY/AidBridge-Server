@@ -2,6 +2,7 @@ import { Schema, model } from 'mongoose'
 import { Collection } from '../../constants/collections'
 import { Role } from '../../constants/role'
 import { MAX_RATING } from '../../constants/task'
+import { MAX_BLOCK_REASON_LENGTH } from '../../constants/user'
 import { geoPointSchema } from '../../lib/geoPointSchema'
 
 const ROLE_VALUES: Role[] = Object.values(Role)
@@ -29,6 +30,11 @@ const userSchema = new Schema(
     // Hashed reset token + expiry, set by forgot-password and cleared by reset-password.
     passwordResetToken: { type: String, select: false },
     passwordResetExpires: { type: Date, select: false },
+    // A blocked account cannot log in and its token stops working at once (see auth()). It is not
+    // deleted: an admin can lift the block, and the email stays taken.
+    isBlocked: { type: Boolean, default: false },
+    blockedAt: { type: Date },
+    blockReason: { type: String, trim: true, maxlength: MAX_BLOCK_REASON_LENGTH },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
   },

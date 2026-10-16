@@ -4,7 +4,7 @@ import { catchAsync } from '../../utils/catchAsync'
 import { getAuthUser } from '../../utils/getAuthUser'
 import { sendResponse } from '../../utils/sendResponse'
 import { idParamSchema } from '../../utils/validation'
-import { createAccountSchema, listUsersQuerySchema } from './user.interface'
+import { blockUserSchema, createAccountSchema, listUsersQuerySchema } from './user.interface'
 import { UserService } from './user.service'
 
 const listUsers = catchAsync(async (req, res) => {
@@ -41,4 +41,27 @@ const createAccount = catchAsync(async (req, res) => {
   })
 })
 
-export const UserController = { listUsers, getUserById, createAccount }
+const blockUser = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const payload = blockUserSchema.parse(req.body ?? {})
+  const user = await UserService.blockUser(id, payload)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Account blocked successfully',
+    data: user,
+  })
+})
+
+const unblockUser = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const user = await UserService.unblockUser(id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Account unblocked successfully',
+    data: user,
+  })
+})
+
+export const UserController = { listUsers, getUserById, createAccount, blockUser, unblockUser }

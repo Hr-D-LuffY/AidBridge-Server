@@ -160,14 +160,14 @@ const approveRequest = async (
       // Only a still-active normal user can be promoted; otherwise the whole approval rolls back
       // and the admin can reject the request instead.
       const promoted = await User.updateOne(
-        { _id: request.user, role: Role.VICTIM, isDeleted: false },
+        { _id: request.user, role: Role.VICTIM, isDeleted: false, isBlocked: { $ne: true } },
         { $set: { role: Role.VOLUNTEER } },
         { session },
       )
       if (promoted.matchedCount === 0) {
         throw new AppError(
           httpStatus.CONFLICT,
-          'This user can no longer become a volunteer (account deleted or role changed). Reject the request instead',
+          'This user can no longer become a volunteer (account deleted, blocked or role changed). Reject the request instead',
         )
       }
       approved = request
