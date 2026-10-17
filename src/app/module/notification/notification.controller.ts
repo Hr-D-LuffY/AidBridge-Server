@@ -1,12 +1,15 @@
 import httpStatus from 'http-status'
 import { catchAsync } from '../../utils/catchAsync'
 import { getAuthUser } from '../../utils/getAuthUser'
+import { normalizeQuery } from '../../utils/queryList'
 import { sendResponse } from '../../utils/sendResponse'
 import { idParamSchema } from '../../utils/validation'
 import {
   createNotificationSchema,
   listBroadcastsQuerySchema,
   listNotificationsQuerySchema,
+  readAllQuerySchema,
+  updatePreferencesSchema,
 } from './notification.interface'
 import { NotificationService } from './notification.service'
 
@@ -29,6 +32,38 @@ const getUnreadCount = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     message: 'Unread count retrieved successfully',
     data: { count },
+  })
+})
+
+const markAllRead = catchAsync(async (req, res) => {
+  const query = readAllQuerySchema.parse(normalizeQuery(req.query))
+  const result = await NotificationService.markAllRead(getAuthUser(req), query)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Notifications marked as read',
+    data: result,
+  })
+})
+
+const getPreferences = catchAsync(async (req, res) => {
+  const preferences = await NotificationService.getPreferences(getAuthUser(req))
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Notification preferences retrieved successfully',
+    data: preferences,
+  })
+})
+
+const updatePreferences = catchAsync(async (req, res) => {
+  const changes = updatePreferencesSchema.parse(req.body)
+  const preferences = await NotificationService.updatePreferences(getAuthUser(req), changes)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Notification preferences updated successfully',
+    data: preferences,
   })
 })
 
@@ -74,4 +109,7 @@ export const NotificationController = {
   listBroadcasts,
   createNotification,
   markRead,
+  markAllRead,
+  getPreferences,
+  updatePreferences,
 }

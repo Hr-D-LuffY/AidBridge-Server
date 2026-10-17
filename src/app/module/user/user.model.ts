@@ -1,4 +1,5 @@
 import { Schema, model } from 'mongoose'
+import { NotificationCategory } from '../../constants/notification'
 import { Collection } from '../../constants/collections'
 import { Role } from '../../constants/role'
 import { MAX_RATING } from '../../constants/task'
@@ -7,6 +8,19 @@ import { geoPointSchema } from '../../lib/geoPointSchema'
 
 const ROLE_VALUES: Role[] = Object.values(Role)
 const DEFAULT_RELIABILITY_SCORE = 5
+
+// One switch pair per notification category. Nothing is defaulted here: a switch the person never touched
+// is absent and the rules (notification.rules.ts) fill in the default.
+const categoryPreferenceSchema = new Schema(
+  { inApp: { type: Boolean }, email: { type: Boolean } },
+  { _id: false },
+)
+const notificationPreferencesSchema = new Schema(
+  Object.fromEntries(
+    Object.values(NotificationCategory).map((category) => [category, categoryPreferenceSchema]),
+  ),
+  { _id: false },
+)
 
 const userSchema = new Schema(
   {
@@ -35,6 +49,7 @@ const userSchema = new Schema(
     isBlocked: { type: Boolean, default: false },
     blockedAt: { type: Date },
     blockReason: { type: String, trim: true, maxlength: MAX_BLOCK_REASON_LENGTH },
+    notificationPreferences: { type: notificationPreferencesSchema, default: undefined },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
   },

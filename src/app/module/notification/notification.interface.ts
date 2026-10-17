@@ -4,9 +4,12 @@ import {
   MAX_NOTIFICATION_MESSAGE_LENGTH,
   MAX_NOTIFICATION_TITLE_LENGTH,
   NOTIFICATION_TARGETS,
+  NotificationCategory,
   type NotificationTarget,
+  NotificationType,
 } from '../../constants/notification'
 import { paginationQueryShape } from '../../utils/pagination'
+import { isCategoryLocked } from './notification.rules'
 
 export const createNotificationSchema = z.strictObject({
   title: z
@@ -51,6 +54,60 @@ export const listNotificationsQuerySchema = z.object({
     .optional()
     .transform((value) => value === 'true'),
 })
+
+// `PUT /notifications/read-all`: everything unread, or only one type or one category of it.
+export const readAllQuerySchema = z
+  .object({
+    type: z
+      .enum(NotificationType, {
+        error: `Type must be one of: ${Object.values(NotificationType).join(', ')}`,
+      })
+      .optional(),
+    category: z
+      .enum(NotificationCategory, {
+        error: `Category must be one of: ${Object.values(NotificationCategory).join(', ')}`,
+      })
+      .optional(),
+  })
+  .refine((query) => !(query.type && query.category), {
+    message: 'Use either "type" or "category", not both',
+    path: ['category'],
+  })
+
+const switchesSchema = z
+  .strictObject({
+    inApp: z.boolean({ error: 'inApp must be true or false' }).optional(),
+    email: z.boolean({ error: 'email must be true or false' }).optional(),
+  })
+  .refine((switches) => switches.inApp !== undefined || switches.email !== undefined, {
+    message: 'Send inApp, email or both',
+  })
+
+const categoryShape = Object.fromEntries(
+  Object.values(NotificationCategory).map((category) => [category, switchesSchema.optional()]),
+) as Record<NotificationCategory, z.ZodOptional<typeof switchesSchema>>
+
+// `PUT /notifications/preferences`: only the categories and switches being changed. An unknown category
+// is a 400 that names it; so is switching off a category whose notifications are all mandatory.
+export const updatePreferencesSchema = z
+  .strictObject(categoryShape)
+  .refine((body) => Object.values(body).some((switches) => switches !== undefined), {
+    message: 'Send at least one category',
+  })
+  .superRefine((body, ctx) => {
+    for (const category of Object.values(NotificationCategory)) {
+      if (body[category]?.inApp === false && isCategoryLocked(category)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [category, 'inApp'],
+          message: `"${category}" notifications are always on and cannot be switched off`,
+        })
+      }
+    }
+  })
+
+export type ReadAllQuery = z.infer<typeof readAllQuerySchema>
+export type PreferencesChange = z.infer<typeof updatePreferencesSchema>
 
 // Admin history of what was sent. Pagination only.
 export const listBroadcastsQuerySchema = z.object({ ...paginationQueryShape })

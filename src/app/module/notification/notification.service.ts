@@ -6,7 +6,9 @@ import {
   BROADCAST_EMAIL_SUBJECT_PREFIX,
   CHAT_NOTIFICATION_TITLE_PREFIX,
   CHAT_PREVIEW_LENGTH,
+  NOTIFICATION_EMAIL_SUBJECT_PREFIX,
   NOTIFICATION_TYPE_META,
+  NotificationCategory,
   type NotificationTarget,
   NotificationType,
 } from '../../constants/notification'
@@ -21,8 +23,17 @@ import type {
   CreateNotificationPayload,
   ListBroadcastsQuery,
   ListNotificationsQuery,
+  PreferencesChange,
+  ReadAllQuery,
 } from './notification.interface'
 import { Notification, type NotificationDocument } from './notification.model'
+import {
+  isCategoryLocked,
+  type NotificationPreferences,
+  resolvePreferences,
+  shouldCreateInApp,
+  shouldSendEmail,
+} from './notification.rules'
 
 const NOT_FOUND_MESSAGE = 'Notification not found'
 
@@ -100,6 +111,44 @@ const markRead = async (viewer: TokenPayload, id: string) => {
   if (!notification) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
   return toNotificationView(notification, viewer.id)
 }
+
+// Marks everything addressed to the caller that they have not opened as read, or only one type or one
+// category of it. One update for the lot; reading twice is harmless. Notifications saved before types
+// existed count as `general`, so they are matched by a missing type. Answers how many were changed.
+const markAllRead = async (viewer: TokenPayload, query: ReadAllQuery) => {
+  const { type, category } = query
+  const types: NotificationType[] = type
+    ? [type]
+    : category
+      ? Object.values(NotificationType).filter(
+          (candidate) => NOTIFICATION_TYPE_META[candidate].category === category,
+        )
+      : []
+  const filter: Record<string, unknown> = { ...visibleTo(viewer), readBy: { $ne: viewer.id } }
+  if (types.length > 0) {
+    filter.type = {
+      $in: types.includes(NotificationType.GENERAL) ? [...types, null] : types,
+    }
+  }
+
+  const result = await Notification.updateMany(filter, { $addToSet: { readBy: viewer.id } })
+  return { count: result.modifiedCount }
+}
+
+// Every category with the person's two switches and whether the in-app one is locked on.
+const toPreferencesView = (preferences: NotificationPreferences) =>
+  Object.fromEntries(
+    Object.values(NotificationCategory).map((category) => [
+      category,
+      { ...preferences[category], inAppLocked: isCategoryLocked(category) },
+    ]),
+  )
+
+const getPreferences = async (viewer: TokenPayload) =>
+  toPreferencesView(await UserService.getNotificationPreferences(viewer.id))
+
+const updatePreferences = async (viewer: TokenPayload, changes: PreferencesChange) =>
+  toPreferencesView(await UserService.updateNotificationPreferences(viewer.id, changes))
 
 // What an admin sent (a notification with a sender and target roles); the ones the system raises for one
 // person (a chat message, a decided request) are not broadcasts and are not listed. `readCount` is how
@@ -206,38 +255,83 @@ interface NotifyUsersInput {
   campId?: string
 }
 
+// Emails the same notification to several people at once (recipients in BCC, in batches, so nobody sees
+// another's address). Detached from the request that caused it: a mail outage is logged, never raised.
+const emailNotification = async (emails: string[], title: string, message: string) => {
+  const subject = `${NOTIFICATION_EMAIL_SUBJECT_PREFIX}: ${title}`
+  const html = `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(message).replace(/\n/g, '<br>')}</p>`
+  for (const batch of chunk(emails, BROADCAST_EMAIL_BATCH_SIZE)) {
+    try {
+      await sendMail({ bcc: batch, subject, html, text: `${title}\n\n${message}` })
+    } catch (error) {
+      console.error(`Notification email failed for a batch of ${batch.length}:`, error)
+    }
+  }
+}
+
+// Who gets this notification and how, from each person's saved switches, in ONE lookup for the whole
+// list. In-app: always for a mandatory type, otherwise when the category's in-app switch is on. Email:
+// only for an emailable type whose category email switch is on, never to a blocked account. A person
+// who no longer exists gets nothing. If the lookup itself fails, everyone gets the in-app one (better
+// a notification too many than a missed one) and nobody gets an email.
+const decideDelivery = async (userIds: string[], type: NotificationType) => {
+  try {
+    const targets = await UserService.getNotificationTargets(userIds)
+    const inApp: string[] = []
+    const emails: string[] = []
+    for (const userId of userIds) {
+      const target = targets.get(userId)
+      if (!target) continue
+      const preferences = resolvePreferences(target.preferences)
+      if (shouldCreateInApp(type, preferences)) inApp.push(userId)
+      if (shouldSendEmail(type, preferences) && !target.isBlocked) emails.push(target.email)
+    }
+    return { inApp, emails }
+  } catch (error) {
+    console.error('Could not read notification preferences, using the defaults:', error)
+    return { inApp: userIds, emails: [] as string[] }
+  }
+}
+
 // The one way other modules tell people something happened. Call it AFTER the change has committed.
 // It never throws: a failure is logged, so a write that already happened is not reported as a failed
-// request. Each person gets their own notification (their own read state). When it is about a request,
-// an unread notification of the same type about the same request is replaced rather than stacked, so
-// a flapping event shows once on the bell. Only personal notifications (one named recipient, no
-// roles) are ever replaced, never a broadcast.
+// request. Each person gets their own notification (their own read state), unless their settings turn
+// that category off and the type is not mandatory. When it is about a request, an unread notification
+// of the same type about the same request is replaced rather than stacked, so a flapping event shows
+// once on the bell. Only personal notifications (one named recipient, no roles) are ever replaced,
+// never a broadcast. Email, when someone asked for it, goes out afterwards and is not waited for.
 const notifyUsers = async (input: NotifyUsersInput) => {
   const { type, title, message, sosRequestId, campId } = input
   const userIds = [...new Set(input.userIds)]
   if (userIds.length === 0) return
 
   try {
-    if (sosRequestId) {
-      await Notification.deleteMany({
-        type,
-        sosRequest: sosRequestId,
-        targetRoles: { $size: 0 },
-        targetUsers: { $in: userIds },
-        'targetUsers.1': { $exists: false },
-        readBy: { $size: 0 },
-      })
+    const { inApp, emails } = await decideDelivery(userIds, type)
+
+    if (inApp.length > 0) {
+      if (sosRequestId) {
+        await Notification.deleteMany({
+          type,
+          sosRequest: sosRequestId,
+          targetRoles: { $size: 0 },
+          targetUsers: { $in: inApp },
+          'targetUsers.1': { $exists: false },
+          readBy: { $size: 0 },
+        })
+      }
+      await Notification.insertMany(
+        inApp.map((userId) => ({
+          type,
+          title,
+          message,
+          targetUsers: [userId],
+          ...(sosRequestId && { sosRequest: sosRequestId }),
+          ...(campId && { camp: campId }),
+        })),
+      )
     }
-    await Notification.insertMany(
-      userIds.map((userId) => ({
-        type,
-        title,
-        message,
-        targetUsers: [userId],
-        ...(sosRequestId && { sosRequest: sosRequestId }),
-        ...(campId && { camp: campId }),
-      })),
-    )
+
+    if (emails.length > 0) void emailNotification(emails, title, message)
   } catch (error) {
     console.error(`Could not notify ${userIds.length} user(s) about ${type}:`, error)
   }
@@ -264,6 +358,9 @@ export const NotificationService = {
   listMine,
   countUnread,
   markRead,
+  markAllRead,
+  getPreferences,
+  updatePreferences,
   listBroadcasts,
   createNotification,
   notifyUsers,

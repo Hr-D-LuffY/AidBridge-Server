@@ -11,6 +11,9 @@ router.get('/', auth(), NotificationController.listNotifications)
 router.get('/unread-count', auth(), NotificationController.getUnreadCount)
 router.get('/broadcasts', auth(Role.ADMIN), NotificationController.listBroadcasts)
 router.post('/', auth(Role.ADMIN), NotificationController.createNotification)
+router.get('/preferences', auth(), NotificationController.getPreferences)
+router.put('/preferences', auth(), NotificationController.updatePreferences)
+router.put('/read-all', auth(), NotificationController.markAllRead)
 router.put('/:id/read', auth(), NotificationController.markRead)
 
 export const NotificationRoutes = router

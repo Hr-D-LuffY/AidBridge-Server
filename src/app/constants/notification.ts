@@ -49,10 +49,11 @@ interface NotificationTypeMeta {
 }
 
 export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMeta> = {
+  // Only old notifications read as this; they are system notices, so they are never switched off.
   [NotificationType.GENERAL]: {
     category: NotificationCategory.SYSTEM,
     emailable: false,
-    mandatory: false,
+    mandatory: true,
   },
   [NotificationType.BROADCAST]: {
     category: NotificationCategory.SYSTEM,
@@ -110,6 +111,13 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
     mandatory: false,
   },
 }
+
+// Categories whose email switch starts on. Everything else starts off, and in-app starts on for all.
+export const DEFAULT_EMAIL_CATEGORIES: readonly NotificationCategory[] = [
+  NotificationCategory.SAFETY,
+]
+
+export const NOTIFICATION_EMAIL_SUBJECT_PREFIX = 'AidBridge'
 
 export const MAX_NOTIFICATION_TITLE_LENGTH = 150
 export const MAX_NOTIFICATION_MESSAGE_LENGTH = 2000

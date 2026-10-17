@@ -15,6 +15,8 @@ import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { hashPassword } from '../../utils/password'
 import { AuditService } from '../audit/audit.service'
+import type { PreferencesChange } from '../notification/notification.interface'
+import { resolvePreferences, type StoredPreferences } from '../notification/notification.rules'
 import { NotificationService } from '../notification/notification.service'
 import { SosService } from '../sos/sos.service'
 import type { BlockUserPayload, CreateAccountPayload, ListUsersQuery } from './user.interface'
@@ -268,6 +270,52 @@ const listEmailsForTargets = async (targets: readonly NotificationTarget[]) => {
   return users.map((user) => user.email)
 }
 
+// Who to deliver a notification to, for many people in one lookup: their email and saved switches. Deleted
+// accounts are absent from the result (there is nobody to tell).
+const getNotificationTargets = async (ids: string[]) => {
+  const users = await User.find({ _id: { $in: ids }, isDeleted: false })
+    .select('email isBlocked notificationPreferences')
+    .lean()
+  return new Map(
+    users.map((user) => [
+      String(user._id),
+      {
+        email: user.email,
+        isBlocked: user.isBlocked,
+        preferences: user.notificationPreferences as StoredPreferences,
+      },
+    ]),
+  )
+}
+
+const getNotificationPreferences = async (id: string) => {
+  const user = await User.findOne({ _id: id, isDeleted: false })
+    .select('notificationPreferences')
+    .lean()
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, 'User not found')
+  return resolvePreferences(user.notificationPreferences as StoredPreferences)
+}
+
+// Saves only the switches that were sent (each is its own field, so two tabs saving different
+// categories don't overwrite each other) and returns every category as it now stands.
+const updateNotificationPreferences = async (id: string, changes: PreferencesChange) => {
+  const set: Record<string, boolean> = {}
+  for (const [category, change] of Object.entries(changes)) {
+    for (const [field, value] of Object.entries(change ?? {})) {
+      if (value !== undefined) set[`notificationPreferences.${category}.${field}`] = value
+    }
+  }
+  const user = await User.findOneAndUpdate(
+    { _id: id, isDeleted: false },
+    { $set: set },
+    { returnDocument: 'after' },
+  )
+    .select('notificationPreferences')
+    .lean()
+  if (!user) throw new AppError(httpStatus.NOT_FOUND, 'User not found')
+  return resolvePreferences(user.notificationPreferences as StoredPreferences)
+}
+
 const countActiveVolunteers = () => User.countDocuments({ role: Role.VOLUNTEER, isDeleted: false })
 
 // Accounts created within the range (everyone when no range is given), deleted ones excluded.
@@ -275,6 +323,9 @@ const countRegistered = (range: DateRange) =>
   User.countDocuments({ isDeleted: false, ...inRange('createdAt', range) })
 
 export const UserService = {
+  getNotificationTargets,
+  getNotificationPreferences,
+  updateNotificationPreferences,
   countActiveVolunteers,
   countRegistered,
   listEmailsForTargets,
