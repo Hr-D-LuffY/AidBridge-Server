@@ -1,6 +1,7 @@
 import httpStatus from 'http-status'
 import mongoose, { type QueryFilter } from 'mongoose'
 import { AuditAction, AuditTargetType } from '../../constants/audit'
+import { NotificationType } from '../../constants/notification'
 import { Role } from '../../constants/role'
 import { VolunteerRequestStatus } from '../../constants/volunteerRequest'
 import { AppError } from '../../errorHelpers/AppError'
@@ -182,11 +183,12 @@ const approveRequest = async (
 
     if (!approved) throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Approval did not complete')
 
-    await NotificationService.notifyUser(
-      String(approved.user),
-      'Volunteer request approved',
-      `You are now a volunteer.${noteSuffix(payload.note)}`,
-    )
+    await NotificationService.notifyUsers({
+      userIds: [String(approved.user)],
+      type: NotificationType.VOLUNTEER_REQUEST_APPROVED,
+      title: 'Volunteer request approved',
+      message: `You are now a volunteer.${noteSuffix(payload.note)}`,
+    })
     await AuditService.record({
       actor: admin,
       action: AuditAction.VOLUNTEER_REQUEST_APPROVED,
@@ -220,11 +222,12 @@ const rejectRequest = async (
   )
   if (!request) return explainUnclaimable(requestId)
 
-  await NotificationService.notifyUser(
-    String(request.user),
-    'Volunteer request not approved',
-    `An admin reviewed your volunteer request and did not approve it.${noteSuffix(payload.note)}`,
-  )
+  await NotificationService.notifyUsers({
+    userIds: [String(request.user)],
+    type: NotificationType.VOLUNTEER_REQUEST_REJECTED,
+    title: 'Volunteer request not approved',
+    message: `An admin reviewed your volunteer request and did not approve it.${noteSuffix(payload.note)}`,
+  })
   await AuditService.record({
     actor: admin,
     action: AuditAction.VOLUNTEER_REQUEST_REJECTED,

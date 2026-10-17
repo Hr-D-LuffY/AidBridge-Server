@@ -8,6 +8,7 @@ import {
   TASK_TRANSITIONS,
   TaskStatus,
 } from '../../constants/task'
+import { NotificationType } from '../../constants/notification'
 import { AppError } from '../../errorHelpers/AppError'
 import { runInTransaction } from '../../lib/transaction'
 import {
@@ -20,6 +21,7 @@ import { type DateRange, inRange } from '../../utils/dateRange'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { assertTransition } from '../../utils/transitions'
 import { type SosRecord, SosService, SOS_PEOPLE_POPULATE } from '../sos/sos.service'
+import { NotificationService } from '../notification/notification.service'
 import { UserService } from '../user/user.service'
 import type {
   ListTasksQuery,
@@ -257,6 +259,20 @@ const updateStatus = async (volunteerId: string, taskId: string, payload: TaskSt
     )
     if (!moved) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
     await SosService.advanceForVolunteer(session, String(task.sosRequest), volunteerId, status)
+  })
+
+  // After the commit: the victim hears about each step. Never fails the request.
+  const volunteerName =
+    (await UserService.getDisplayName(volunteerId).catch(() => null)) ?? 'Your volunteer'
+  const finished = status === TaskStatus.COMPLETED
+  await NotificationService.notifyUsers({
+    userIds: [String(task.victim)],
+    type: finished ? NotificationType.SOS_RESCUED : NotificationType.SOS_ON_THE_WAY,
+    title: finished ? 'Your request was marked as rescued' : 'Your volunteer is on the way',
+    message: finished
+      ? `${volunteerName} marked your SOS request as rescued. You can now rate your volunteer.`
+      : `${volunteerName} is on the way to you.`,
+    sosRequestId: String(task.sosRequest),
   })
   return getView(taskId)
 }

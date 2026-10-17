@@ -1,7 +1,11 @@
 import httpStatus from 'http-status'
 import type { ClientSession, QueryFilter } from 'mongoose'
 import { AuditAction, AuditTargetType } from '../../constants/audit'
-import { ALL_ROLES_TARGET, type NotificationTarget } from '../../constants/notification'
+import {
+  ALL_ROLES_TARGET,
+  type NotificationTarget,
+  NotificationType,
+} from '../../constants/notification'
 import { Role } from '../../constants/role'
 import { BLOCKED_CLOSE_REASON } from '../../constants/user'
 import { AppError } from '../../errorHelpers/AppError'
@@ -174,13 +178,12 @@ const blockUser = async (admin: TokenPayload, id: string, payload: BlockUserPayl
   })
 
   // After the commit, and never failing the request: the volunteers on the closed requests are told.
-  for (const volunteerId of new Set(volunteerIds)) {
-    await NotificationService.notifyUser(
-      volunteerId,
-      'SOS request closed',
-      `An administrator closed an SOS request you were working on: ${BLOCKED_CLOSE_REASON}`,
-    )
-  }
+  await NotificationService.notifyUsers({
+    userIds: volunteerIds,
+    type: NotificationType.TASK_CANCELLED,
+    title: 'SOS request closed',
+    message: `An administrator closed an SOS request you were working on: ${BLOCKED_CLOSE_REASON}`,
+  })
 
   await AuditService.record({
     actor: admin,

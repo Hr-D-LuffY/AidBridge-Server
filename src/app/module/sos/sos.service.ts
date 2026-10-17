@@ -1,6 +1,7 @@
 import httpStatus from 'http-status'
 import { type ClientSession, type QueryFilter, Types } from 'mongoose'
 import { AuditAction, AuditTargetType } from '../../constants/audit'
+import { NotificationType } from '../../constants/notification'
 import { Role } from '../../constants/role'
 import {
   MAX_ACTIVE_SOS_PER_VICTIM,
@@ -342,11 +343,14 @@ const updateSos = async (victimId: string, id: string, payload: UpdateSosPayload
   await Promise.all(removed.map(deleteMedia))
 
   if (existing.assignedVolunteer) {
-    await NotificationService.notifyUser(
-      String(existing.assignedVolunteer),
-      'SOS request updated',
-      'The victim changed an SOS request you are working on. Open it to see the latest details.',
-    )
+    await NotificationService.notifyUsers({
+      userIds: [String(existing.assignedVolunteer)],
+      type: NotificationType.SOS_UPDATED,
+      title: 'SOS request updated',
+      message:
+        'The victim changed an SOS request you are working on. Open it to see the latest details.',
+      sosRequestId: id,
+    })
   }
 
   return getFullView(id)
@@ -430,11 +434,13 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
   })
 
   if (existing.assignedVolunteer) {
-    await NotificationService.notifyUser(
-      String(existing.assignedVolunteer),
-      'SOS request closed',
-      `The victim closed an SOS request you were working on: ${payload.resolveReason}`,
-    )
+    await NotificationService.notifyUsers({
+      userIds: [String(existing.assignedVolunteer)],
+      type: NotificationType.TASK_CANCELLED,
+      title: 'SOS request closed',
+      message: `The victim closed an SOS request you were working on: ${payload.resolveReason}`,
+      sosRequestId: id,
+    })
   }
 
   return getFullView(id)
@@ -568,6 +574,14 @@ const acceptSos = async (volunteerId: string, id: string) => {
   })
 
   const [sosRequest, task] = await Promise.all([getFullView(id), TaskService.getView(taskId)])
+
+  await NotificationService.notifyUsers({
+    userIds: [String(sos.victim)],
+    type: NotificationType.SOS_ASSIGNED,
+    title: 'A volunteer accepted your request',
+    message: `${sosRequest.assignedVolunteer?.name ?? 'A volunteer'} accepted your SOS request and will set off soon.`,
+    sosRequestId: id,
+  })
   return { sosRequest, task }
 }
 
@@ -588,6 +602,15 @@ const rejectSos = async (volunteerId: string, id: string) => {
     await runInTransaction(async (session) => {
       await releaseToPending(session, id, volunteerId)
       await TaskService.withdrawAccepted(session, id, volunteerId)
+    })
+
+    await NotificationService.notifyUsers({
+      userIds: [String(sos.victim)],
+      type: NotificationType.VOLUNTEER_BACKED_OUT,
+      title: 'Your volunteer can no longer come',
+      message:
+        'The volunteer who accepted your SOS request had to back out. Your request is open again for other volunteers.',
+      sosRequestId: id,
     })
     return { sosRequestId: id, outcome: 'withdrawn' as const }
   }

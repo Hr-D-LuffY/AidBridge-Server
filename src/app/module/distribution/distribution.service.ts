@@ -1,6 +1,7 @@
 import httpStatus from 'http-status'
 import type { QueryFilter, Types } from 'mongoose'
 import { DEFAULT_RECIPIENT_NAME } from '../../constants/distribution'
+import { NotificationType } from '../../constants/notification'
 import { Role } from '../../constants/role'
 import type { ReliefCategory } from '../../constants/relief'
 import { AppError } from '../../errorHelpers/AppError'
@@ -11,6 +12,7 @@ import { type DateRange, inRange } from '../../utils/dateRange'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { CampService } from '../camp/camp.service'
 import { InventoryService } from '../inventory/inventory.service'
+import { NotificationService } from '../notification/notification.service'
 import { TaskService } from '../task/task.service'
 import { UserService } from '../user/user.service'
 import type { CreateDistributionPayload, ListDistributionsQuery } from './distribution.interface'
@@ -121,7 +123,7 @@ const createDistribution = async (volunteerId: string, payload: CreateDistributi
   await assertStockAvailable(campId, inventoryItemId, quantity)
   const recipientName = (await UserService.getDisplayName(task.victim)) ?? DEFAULT_RECIPIENT_NAME
 
-  const recordId = await runInTransaction(async (session) => {
+  const { recordId, lowItem } = await runInTransaction(async (session) => {
     const item = await deductStock(session, { itemId: inventoryItemId, campId }, quantity)
     if (!item) throw new AppError(httpStatus.CONFLICT, STOCK_CHANGED_MESSAGE)
 
@@ -148,8 +150,29 @@ const createDistribution = async (volunteerId: string, payload: CreateDistributi
       { session },
     )
     if (!record) throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Record was not saved')
-    return String(record._id)
+
+    // Stock only goes down here, so "low now and not low before" is worked out from the numbers: before
+    // this hand-out the item held `quantity` more than it does now.
+    const crossedThreshold = item.isLow && item.quantity + quantity > item.lowStockThreshold
+    return {
+      recordId: String(record._id),
+      lowItem: crossedThreshold
+        ? { name: item.itemName, quantity: item.quantity, unit: item.unit }
+        : null,
+    }
   })
+
+  // After the commit, once per time the item drops to its threshold (not on every hand-out below it),
+  // and never failing the request: the NGO that owns the camp is told.
+  if (lowItem) {
+    await NotificationService.notifyUsers({
+      userIds: [camp.ngo],
+      type: NotificationType.INVENTORY_LOW,
+      title: 'Stock running low',
+      message: `${lowItem.name} is down to ${lowItem.quantity} ${lowItem.unit} at ${camp.name}.`,
+      campId,
+    })
+  }
 
   return getView(recordId)
 }

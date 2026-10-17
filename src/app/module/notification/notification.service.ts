@@ -6,7 +6,9 @@ import {
   BROADCAST_EMAIL_SUBJECT_PREFIX,
   CHAT_NOTIFICATION_TITLE_PREFIX,
   CHAT_PREVIEW_LENGTH,
+  NOTIFICATION_TYPE_META,
   type NotificationTarget,
+  NotificationType,
 } from '../../constants/notification'
 import { AppError } from '../../errorHelpers/AppError'
 import { sendMail } from '../../lib/mailer'
@@ -28,23 +30,31 @@ interface NotificationFields {
   _id: Types.ObjectId
   title: string
   message: string
+  type?: NotificationType | null
   isEmergencyBroadcast: boolean
   sosRequest?: Types.ObjectId | null
+  camp?: Types.ObjectId | null
   readBy: Types.ObjectId[]
   createdAt: Date
 }
 
 // What a client sees. `readBy` holds other people's ids, so it is reduced to one fact: has the
 // caller opened it.
-const toNotificationView = (notification: NotificationFields, viewerId: string) => ({
-  id: String(notification._id),
-  title: notification.title,
-  message: notification.message,
-  isEmergencyBroadcast: notification.isEmergencyBroadcast,
-  sosRequestId: notification.sosRequest ? String(notification.sosRequest) : null,
-  isRead: notification.readBy.some((reader) => String(reader) === viewerId),
-  createdAt: notification.createdAt,
-})
+const toNotificationView = (notification: NotificationFields, viewerId: string) => {
+  const type = notification.type ?? NotificationType.GENERAL
+  return {
+    id: String(notification._id),
+    type,
+    category: NOTIFICATION_TYPE_META[type].category,
+    title: notification.title,
+    message: notification.message,
+    isEmergencyBroadcast: notification.isEmergencyBroadcast,
+    sosRequestId: notification.sosRequest ? String(notification.sosRequest) : null,
+    campId: notification.camp ? String(notification.camp) : null,
+    isRead: notification.readBy.some((reader) => String(reader) === viewerId),
+    createdAt: notification.createdAt,
+  }
+}
 
 // Addressed to the caller: to everyone, to their role, or to them by name.
 const visibleTo = (viewer: TokenPayload): QueryFilter<NotificationDocument> => ({
@@ -162,6 +172,7 @@ const createNotification = async (admin: TokenPayload, payload: CreateNotificati
     message,
     targetRoles,
     isEmergencyBroadcast,
+    type: NotificationType.BROADCAST,
     createdBy: admin.id,
   })
 
@@ -182,47 +193,72 @@ const createNotification = async (admin: TokenPayload, payload: CreateNotificati
   return toNotificationView(notification, admin.id)
 }
 
-// For other modules: tell one person something happened (a volunteer request was decided, the victim
-// changed a request you are working). The caller's own write has already committed by now, so a
-// failure here is logged and swallowed rather than reported as a failed request.
-const notifyUser = async (userId: string, title: string, message: string) => {
-  try {
-    await Notification.create({ title, message, targetUsers: [userId] })
-  } catch (error) {
-    console.error(`Could not notify user ${userId}:`, error)
-  }
-}
-
 const truncate = (text: string, length: number) =>
   text.length > length ? `${text.slice(0, length - 1).trimEnd()}…` : text
 
-// Tells one person that someone wrote to them on a request. Unread messages from the same sender on
-// the same request are swapped for this newest one, so the bell counts conversations, not messages.
-// Like notifyUser, it runs after the message is saved and never fails the request.
-const notifyChatMessage = async (
+interface NotifyUsersInput {
+  userIds: string[]
+  type: NotificationType
+  title: string
+  message: string
+  // The request or camp it is about, so a client can open it.
+  sosRequestId?: string
+  campId?: string
+}
+
+// The one way other modules tell people something happened. Call it AFTER the change has committed.
+// It never throws: a failure is logged, so a write that already happened is not reported as a failed
+// request. Each person gets their own notification (their own read state). When it is about a request,
+// an unread notification of the same type about the same request is replaced rather than stacked, so
+// a flapping event shows once on the bell. Only personal notifications (one named recipient, no
+// roles) are ever replaced, never a broadcast.
+const notifyUsers = async (input: NotifyUsersInput) => {
+  const { type, title, message, sosRequestId, campId } = input
+  const userIds = [...new Set(input.userIds)]
+  if (userIds.length === 0) return
+
+  try {
+    if (sosRequestId) {
+      await Notification.deleteMany({
+        type,
+        sosRequest: sosRequestId,
+        targetRoles: { $size: 0 },
+        targetUsers: { $in: userIds },
+        'targetUsers.1': { $exists: false },
+        readBy: { $size: 0 },
+      })
+    }
+    await Notification.insertMany(
+      userIds.map((userId) => ({
+        type,
+        title,
+        message,
+        targetUsers: [userId],
+        ...(sosRequestId && { sosRequest: sosRequestId }),
+        ...(campId && { camp: campId }),
+      })),
+    )
+  } catch (error) {
+    console.error(`Could not notify ${userIds.length} user(s) about ${type}:`, error)
+  }
+}
+
+// Tells one person that someone wrote to them on a request, with who wrote and the start of what they
+// wrote. Unread messages on the same request are replaced by the newest, so the bell counts
+// conversations, not messages.
+const notifyChatMessage = (
   recipientId: string,
   senderName: string,
   content: string,
   sosRequestId: string,
-) => {
-  const title = `${CHAT_NOTIFICATION_TITLE_PREFIX} ${senderName}`
-  try {
-    await Notification.deleteMany({
-      targetUsers: recipientId,
-      sosRequest: sosRequestId,
-      title,
-      readBy: { $ne: recipientId },
-    })
-    await Notification.create({
-      title,
-      message: truncate(content, CHAT_PREVIEW_LENGTH),
-      targetUsers: [recipientId],
-      sosRequest: sosRequestId,
-    })
-  } catch (error) {
-    console.error(`Could not notify user ${recipientId} of a message:`, error)
-  }
-}
+) =>
+  notifyUsers({
+    userIds: [recipientId],
+    type: NotificationType.CHAT_MESSAGE,
+    title: `${CHAT_NOTIFICATION_TITLE_PREFIX} ${senderName}`,
+    message: truncate(content, CHAT_PREVIEW_LENGTH),
+    sosRequestId,
+  })
 
 export const NotificationService = {
   listMine,
@@ -230,6 +266,6 @@ export const NotificationService = {
   markRead,
   listBroadcasts,
   createNotification,
-  notifyUser,
+  notifyUsers,
   notifyChatMessage,
 }
