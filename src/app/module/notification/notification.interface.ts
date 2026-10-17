@@ -52,5 +52,9 @@ export const listNotificationsQuerySchema = z.object({
     .transform((value) => value === 'true'),
 })
 
+// Admin history of what was sent. Pagination only.
+export const listBroadcastsQuerySchema = z.object({ ...paginationQueryShape })
+
+export type ListBroadcastsQuery = z.infer<typeof listBroadcastsQuerySchema>
 export type CreateNotificationPayload = z.infer<typeof createNotificationSchema>
 export type ListNotificationsQuery = z.infer<typeof listNotificationsQuerySchema>

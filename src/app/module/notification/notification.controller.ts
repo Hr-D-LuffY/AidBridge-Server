@@ -3,7 +3,11 @@ import { catchAsync } from '../../utils/catchAsync'
 import { getAuthUser } from '../../utils/getAuthUser'
 import { sendResponse } from '../../utils/sendResponse'
 import { idParamSchema } from '../../utils/validation'
-import { createNotificationSchema, listNotificationsQuerySchema } from './notification.interface'
+import {
+  createNotificationSchema,
+  listBroadcastsQuerySchema,
+  listNotificationsQuerySchema,
+} from './notification.interface'
 import { NotificationService } from './notification.service'
 
 const listNotifications = catchAsync(async (req, res) => {
@@ -25,6 +29,18 @@ const getUnreadCount = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     message: 'Unread count retrieved successfully',
     data: { count },
+  })
+})
+
+const listBroadcasts = catchAsync(async (req, res) => {
+  const query = listBroadcastsQuerySchema.parse(req.query)
+  const { items, meta } = await NotificationService.listBroadcasts(query)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Broadcast history retrieved successfully',
+    data: items,
+    meta,
   })
 })
 
@@ -55,6 +71,7 @@ const markRead = catchAsync(async (req, res) => {
 export const NotificationController = {
   listNotifications,
   getUnreadCount,
+  listBroadcasts,
   createNotification,
   markRead,
 }

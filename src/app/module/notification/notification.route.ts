@@ -9,6 +9,7 @@ const router = Router()
 // the service from their role and id.
 router.get('/', auth(), NotificationController.listNotifications)
 router.get('/unread-count', auth(), NotificationController.getUnreadCount)
+router.get('/broadcasts', auth(Role.ADMIN), NotificationController.listBroadcasts)
 router.post('/', auth(Role.ADMIN), NotificationController.createNotification)
 router.put('/:id/read', auth(), NotificationController.markRead)
 

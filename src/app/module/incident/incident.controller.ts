@@ -35,6 +35,17 @@ const listIncidents = catchAsync(async (req, res) => {
   })
 })
 
+const getIncident = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const incident = await IncidentService.getIncident(getAuthUser(req), id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Incident retrieved successfully',
+    data: incident,
+  })
+})
+
 const updateIncident = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const payload = updateIncidentSchema.parse(req.body)
@@ -84,6 +95,7 @@ const deleteIncident = catchAsync(async (req, res) => {
 })
 
 export const IncidentController = {
+  getIncident,
   createIncident,
   listIncidents,
   updateIncident,

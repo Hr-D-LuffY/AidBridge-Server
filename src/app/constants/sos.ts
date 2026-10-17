@@ -39,6 +39,19 @@ export type MediaType = (typeof MediaType)[keyof typeof MediaType]
 // A victim can have this many unfinished requests at once (stops spam; closing one frees a slot).
 export const MAX_ACTIVE_SOS_PER_VICTIM = 3
 
+// How `GET /sos` can be ordered. `priority` puts critical first, then newest within each level.
+export const SosSort = {
+  NEWEST: 'newest',
+  OLDEST: 'oldest',
+  PRIORITY: 'priority',
+} as const
+
+export type SosSort = (typeof SosSort)[keyof typeof SosSort]
+
+// `q` is matched against the description and address with a MongoDB text index.
+export const MIN_SOS_SEARCH_LENGTH = 2
+export const MAX_SOS_SEARCH_LENGTH = 100
+
 export const MAX_SOS_DESCRIPTION_LENGTH = 1000
 export const MAX_SOS_ADDRESS_LENGTH = 300
 export const MAX_SOS_RESOLVE_REASON_LENGTH = 500

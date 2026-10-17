@@ -20,6 +20,15 @@ export const Priority = {
 
 export type Priority = (typeof Priority)[keyof typeof Priority]
 
+// Most urgent first. Priorities are stored as words, so sorting by the field would put "critical" before
+// "high" before "low" before "medium"; sorting by position in this list gives the real order.
+export const PRIORITY_ORDER: readonly Priority[] = [
+  Priority.CRITICAL,
+  Priority.HIGH,
+  Priority.MEDIUM,
+  Priority.LOW,
+]
+
 export const DisasterType = {
   FLOOD: 'flood',
   EARTHQUAKE: 'earthquake',

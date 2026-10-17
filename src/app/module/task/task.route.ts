@@ -6,6 +6,7 @@ import { TaskController } from './task.controller'
 const router = Router()
 
 router.get('/', auth(Role.VOLUNTEER), TaskController.listMyTasks)
+router.get('/:id', auth(Role.VOLUNTEER), TaskController.getTask)
 router.put('/:id/respond', auth(Role.VOLUNTEER), TaskController.respond)
 router.put('/:id/status', auth(Role.VOLUNTEER), TaskController.updateStatus)
 

@@ -8,6 +8,7 @@ const router = Router()
 // Any logged-in user can read the incident history; only admins change it.
 router.get('/', auth(), IncidentController.listIncidents)
 router.post('/', auth(Role.ADMIN), IncidentController.createIncident)
+router.get('/:id', auth(), IncidentController.getIncident)
 
 router.put('/:id/priority', auth(Role.ADMIN), IncidentController.setPriority)
 router.put('/:id/sos', auth(Role.ADMIN), IncidentController.linkRequests)

@@ -3,6 +3,7 @@ import type { QueryFilter, Types, UpdateQuery } from 'mongoose'
 import { AuditAction, AuditTargetType, MAX_AUDIT_META_IDS } from '../../constants/audit'
 import { IncidentStatus, SosLinkAction } from '../../constants/incident'
 import { type DisasterType, Priority } from '../../constants/relief'
+import { Role } from '../../constants/role'
 import { AppError } from '../../errorHelpers/AppError'
 import { toGeoPoint } from '../../lib/geo'
 import type { TokenPayload } from '../../utils/jwt'
@@ -88,6 +89,11 @@ const getIncidentView = async (id: string, options: { includeLinks?: boolean } =
   if (!view) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
   return view
 }
+
+// Any logged-in user can open an incident. The ids of the linked SOS requests are only for admins and
+// NGOs: they are the people who can open those requests, and a victim has no use for the list.
+const getIncident = (viewer: TokenPayload, id: string) =>
+  getIncidentView(id, { includeLinks: viewer.role === Role.ADMIN || viewer.role === Role.NGO })
 
 const createIncident = async (admin: TokenPayload, payload: CreateIncidentPayload) => {
   const { coordinates, ...fields } = payload
@@ -300,6 +306,7 @@ const getSummary = async () => {
 
 export const IncidentService = {
   getSummary,
+  getIncident,
   createIncident,
   listIncidents,
   updateIncident,

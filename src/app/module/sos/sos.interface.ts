@@ -5,11 +5,21 @@ import {
   MAX_SOS_DESCRIPTION_LENGTH,
   MAX_SOS_MEDIA_ITEMS,
   MAX_SOS_RESOLVE_REASON_LENGTH,
+  MAX_SOS_SEARCH_LENGTH,
+  MIN_SOS_SEARCH_LENGTH,
+  SosSort,
   SosStatus,
 } from '../../constants/sos'
 import { coordinatesSchema, nearbyQueryShape } from '../../lib/geo'
 import { paginationQueryShape } from '../../utils/pagination'
-import { atLeastOneField, objectIdSchema, updateBodySchema } from '../../utils/validation'
+import { queryList } from '../../utils/queryList'
+import {
+  atLeastOneField,
+  isoDateEndSchema,
+  isoDateSchema,
+  objectIdSchema,
+  updateBodySchema,
+} from '../../utils/validation'
 
 const needsSchema = z
   .array(
@@ -78,13 +88,43 @@ export const resolveSosSchema = z.strictObject({
 
 export const setPrioritySchema = z.strictObject({ priority: prioritySchema })
 
-export const listSosQuerySchema = z.object({
-  ...paginationQueryShape,
-  status: z
-    .enum(SosStatus, { error: `Status must be one of: ${Object.values(SosStatus).join(', ')}` })
-    .optional(),
-  priority: prioritySchema.optional(),
+const statusSchema = z.enum(SosStatus, {
+  error: `Status must be one of: ${Object.values(SosStatus).join(', ')}`,
 })
+
+const needFilterSchema = z.enum(ReliefCategory, {
+  error: `Need must be one of: ${Object.values(ReliefCategory).join(', ')}`,
+})
+
+// Parse `normalizeQuery(req.query)`, not `req.query`: the filters below are lists that may arrive as
+// `status[]=a&status[]=b`, a repeated key or a comma list. Blank values are dropped before this runs.
+export const listSosQuerySchema = z
+  .object({
+    ...paginationQueryShape,
+    status: queryList(statusSchema, Object.keys(SosStatus).length),
+    priority: queryList(prioritySchema, Object.keys(Priority).length),
+    needs: queryList(needFilterSchema, Object.keys(ReliefCategory).length),
+    q: z
+      .string()
+      .trim()
+      .min(MIN_SOS_SEARCH_LENGTH, `Search must be at least ${MIN_SOS_SEARCH_LENGTH} characters`)
+      .max(MAX_SOS_SEARCH_LENGTH, `Search must be at most ${MAX_SOS_SEARCH_LENGTH} characters`)
+      .optional(),
+    from: isoDateSchema.optional(),
+    // A bare date means "through the end of that day".
+    to: isoDateEndSchema.optional(),
+    sort: z
+      .enum(SosSort, { error: `Sort must be one of: ${Object.values(SosSort).join(', ')}` })
+      .default(SosSort.NEWEST),
+    // Admin and NGO only (the service answers 403 to anyone else).
+    incidentId: objectIdSchema.optional(),
+    volunteerId: objectIdSchema.optional(),
+    victimId: objectIdSchema.optional(),
+  })
+  .refine((query) => !query.from || !query.to || query.from <= query.to, {
+    message: '"from" must not be after "to"',
+    path: ['from'],
+  })
 
 export const nearbySosQuerySchema = z.object({
   ...paginationQueryShape,

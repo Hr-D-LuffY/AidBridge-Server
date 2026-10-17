@@ -15,7 +15,11 @@ import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { AuditService } from '../audit/audit.service'
 import { UserService } from '../user/user.service'
-import type { CreateNotificationPayload, ListNotificationsQuery } from './notification.interface'
+import type {
+  CreateNotificationPayload,
+  ListBroadcastsQuery,
+  ListNotificationsQuery,
+} from './notification.interface'
 import { Notification, type NotificationDocument } from './notification.model'
 
 const NOT_FOUND_MESSAGE = 'Notification not found'
@@ -85,6 +89,43 @@ const markRead = async (viewer: TokenPayload, id: string) => {
   ).lean()
   if (!notification) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
   return toNotificationView(notification, viewer.id)
+}
+
+// What an admin sent (a notification with a sender and target roles); the ones the system raises for one
+// person (a chat message, a decided request) are not broadcasts and are not listed. `readCount` is how
+// many people have opened it, never who.
+const listBroadcasts = async (query: ListBroadcastsQuery) => {
+  const { page, limit } = query
+  const filter: QueryFilter<NotificationDocument> = {
+    createdBy: { $exists: true },
+    'targetRoles.0': { $exists: true },
+  }
+
+  const [broadcasts, total] = await Promise.all([
+    Notification.find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(getPagination(query).skip)
+      .limit(limit)
+      .populate<{ createdBy: { _id: Types.ObjectId; name: string } | null }>('createdBy', 'name')
+      .lean(),
+    Notification.countDocuments(filter),
+  ])
+
+  return {
+    items: broadcasts.map((broadcast) => ({
+      id: String(broadcast._id),
+      title: broadcast.title,
+      message: broadcast.message,
+      targetRoles: broadcast.targetRoles,
+      isEmergencyBroadcast: broadcast.isEmergencyBroadcast,
+      sentBy: broadcast.createdBy
+        ? { id: String(broadcast.createdBy._id), name: broadcast.createdBy.name }
+        : null,
+      readCount: broadcast.readBy.length,
+      createdAt: broadcast.createdAt,
+    })),
+    meta: buildMeta({ page, limit }, total),
+  }
 }
 
 const chunk = <T>(items: T[], size: number) => {
@@ -187,6 +228,7 @@ export const NotificationService = {
   listMine,
   countUnread,
   markRead,
+  listBroadcasts,
   createNotification,
   notifyUser,
   notifyChatMessage,

@@ -1,5 +1,5 @@
 import httpStatus from 'http-status'
-import type { ClientSession, QueryFilter, Types } from 'mongoose'
+import { type ClientSession, type QueryFilter, Types } from 'mongoose'
 import { AuditAction, AuditTargetType } from '../../constants/audit'
 import { Role } from '../../constants/role'
 import {
@@ -10,10 +10,11 @@ import {
   SOS_MEDIA_FOLDER,
   SOS_MEDIA_FORMATS,
   SOS_TRANSITIONS,
+  SosSort,
   SosStatus,
 } from '../../constants/sos'
 import { type TaskProgressStatus, TaskStatus } from '../../constants/task'
-import type { Priority } from '../../constants/relief'
+import { PRIORITY_ORDER, type Priority } from '../../constants/relief'
 import { AppError } from '../../errorHelpers/AppError'
 import {
   assertMediaStorageConfigured,
@@ -28,6 +29,7 @@ import { buildMeta, getPagination } from '../../utils/pagination'
 import { type DateRange, inRange } from '../../utils/dateRange'
 import { assertTransition } from '../../utils/transitions'
 import { AuditService } from '../audit/audit.service'
+import { Incident } from '../incident/incident.model'
 import { NotificationService } from '../notification/notification.service'
 import { TaskService } from '../task/task.service'
 import type {
@@ -176,27 +178,83 @@ const createSos = async (victimId: string, payload: CreateSosPayload) => {
   return toFullView(sos)
 }
 
-// Admins and NGOs see every request. Everyone else sees the ones they raised or were assigned.
-const listSos = async (viewer: TokenPayload, query: ListSosQuery) => {
-  const { page, limit, status, priority } = query
+const toObjectId = (id: string) => new Types.ObjectId(id)
 
-  const filter: QueryFilter<unknown> = {}
-  if (viewer.role !== Role.ADMIN && viewer.role !== Role.NGO) {
-    filter.$or = [{ victim: viewer.id }, { assignedVolunteer: viewer.id }]
+// The filter for `GET /sos`, composed only from values the schema has already parsed. Ids are cast
+// here because the priority sort runs as an aggregation, which (unlike `find`) does not cast strings.
+// Admins and NGOs see every request, and alone may filter by incident, volunteer or victim. Everyone
+// else sees the ones they raised or were assigned.
+const buildListFilter = async (viewer: TokenPayload, query: ListSosQuery) => {
+  const { status, priority, needs, q, from, to, incidentId, volunteerId, victimId } = query
+  const isStaff = viewer.role === Role.ADMIN || viewer.role === Role.NGO
+  if (!isStaff && (incidentId || volunteerId || victimId)) {
+    throw new AppError(
+      httpStatus.FORBIDDEN,
+      'Only an admin or an NGO can filter by incident, volunteer or victim',
+    )
   }
-  if (status) filter.status = status
-  if (priority) filter.priority = priority
 
-  const [items, total] = await Promise.all([
-    SosRequest.find(filter)
-      .sort({ createdAt: -1, _id: -1 })
+  const filter: QueryFilter<unknown> = { ...inRange('createdAt', { startDate: from, endDate: to }) }
+  if (!isStaff) {
+    filter.$or = [{ victim: toObjectId(viewer.id) }, { assignedVolunteer: toObjectId(viewer.id) }]
+  }
+  if (status) filter.status = { $in: status }
+  if (priority) filter.priority = { $in: priority }
+  if (needs) filter.needs = { $in: needs }
+  if (volunteerId) filter.assignedVolunteer = toObjectId(volunteerId)
+  if (victimId) filter.victim = toObjectId(victimId)
+  // The user's words go to MongoDB's text search as data. Nothing is built into a regex.
+  if (q) filter.$text = { $search: q }
+
+  // The link lives on the incident, so the request ids come from there.
+  if (incidentId) {
+    const incident = await Incident.findOne({ _id: incidentId, isDeleted: false })
+      .select('sosRequests')
+      .lean()
+    if (!incident) throw new AppError(httpStatus.NOT_FOUND, 'Incident not found')
+    filter._id = { $in: incident.sosRequests }
+  }
+  return filter
+}
+
+// Page of ids, most urgent first (see PRIORITY_ORDER), then newest. A string field cannot be sorted
+// into that order, so the rank is worked out in the pipeline.
+const pageIdsByPriority = async (filter: QueryFilter<unknown>, query: ListSosQuery) => {
+  const rows = await SosRequest.aggregate<{ _id: Types.ObjectId }>([
+    { $match: filter },
+    { $addFields: { rank: { $indexOfArray: [PRIORITY_ORDER, '$priority'] } } },
+    { $sort: { rank: 1, createdAt: -1, _id: -1 } },
+    { $skip: getPagination(query).skip },
+    { $limit: query.limit },
+    { $project: { _id: 1 } },
+  ])
+  return rows.map((row) => row._id)
+}
+
+const listSos = async (viewer: TokenPayload, query: ListSosQuery) => {
+  const { page, limit, sort } = query
+  const filter = await buildListFilter(viewer, query)
+  const populate = [...SOS_PEOPLE_POPULATE]
+
+  const loadPage = async () => {
+    if (sort === SosSort.PRIORITY) {
+      const ids = await pageIdsByPriority(filter, query)
+      const found = await SosRequest.find({ _id: { $in: ids } })
+        .populate<{ victim: Person; assignedVolunteer: Person | null }>(populate)
+        .lean()
+      const byId = new Map(found.map((sos) => [String(sos._id), sos]))
+      return ids.flatMap((id) => byId.get(String(id)) ?? [])
+    }
+    const direction = sort === SosSort.OLDEST ? 1 : -1
+    return SosRequest.find(filter)
+      .sort({ createdAt: direction, _id: direction })
       .skip(getPagination(query).skip)
       .limit(limit)
-      .populate<{ victim: Person; assignedVolunteer: Person | null }>(SOS_PEOPLE_POPULATE)
-      .lean(),
-    SosRequest.countDocuments(filter),
-  ])
+      .populate<{ victim: Person; assignedVolunteer: Person | null }>(populate)
+      .lean()
+  }
 
+  const [items, total] = await Promise.all([loadPage(), SosRequest.countDocuments(filter)])
   return { items: items.map(toFullView), meta: buildMeta({ page, limit }, total) }
 }
 

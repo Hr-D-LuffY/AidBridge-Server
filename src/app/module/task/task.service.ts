@@ -89,6 +89,13 @@ const loadOwnTask = async (taskId: string, volunteerId: string) => {
   return task
 }
 
+// One of the volunteer's own tasks, in the same view as the list. Another volunteer's task is a 403,
+// as for every other task route.
+const getMyTask = async (volunteerId: string, taskId: string) => {
+  await loadOwnTask(taskId, volunteerId)
+  return getView(taskId)
+}
+
 const listMyTasks = async (volunteerId: string, query: ListTasksQuery) => {
   const { page, limit, status } = query
   const filter: QueryFilter<unknown> = { volunteer: volunteerId }
@@ -395,6 +402,7 @@ export const TaskService = {
   averageResponseMinutes,
   topVolunteersByCompleted,
   getActiveTask,
+  getMyTask,
   listMyTasks,
   respond,
   updateStatus,

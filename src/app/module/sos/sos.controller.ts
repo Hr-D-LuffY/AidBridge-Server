@@ -1,6 +1,7 @@
 import httpStatus from 'http-status'
 import { catchAsync } from '../../utils/catchAsync'
 import { getAuthUser } from '../../utils/getAuthUser'
+import { normalizeQuery } from '../../utils/queryList'
 import { sendResponse } from '../../utils/sendResponse'
 import { idParamSchema } from '../../utils/validation'
 import {
@@ -25,7 +26,7 @@ const createSos = catchAsync(async (req, res) => {
 })
 
 const listSos = catchAsync(async (req, res) => {
-  const query = listSosQuerySchema.parse(req.query)
+  const query = listSosQuerySchema.parse(normalizeQuery(req.query))
   const { items, meta } = await SosService.listSos(getAuthUser(req), query)
 
   sendResponse(res, {

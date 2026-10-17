@@ -65,6 +65,16 @@ sosSchema.index({ location: '2dsphere' })
 sosSchema.index({ status: 1, priority: 1, victim: 1 })
 // A victim's own list, newest first, and the active-request count.
 sosSchema.index({ victim: 1, createdAt: -1 })
+// A volunteer's list of the requests they took, newest first, and the staff list with no filter.
+sosSchema.index({ assignedVolunteer: 1, createdAt: -1 })
+sosSchema.index({ createdAt: -1 })
+// `GET /sos?q=`: one text index over the description and address. The description counts double. The
+// language is "none" so the words of any language (Bangla included) are matched as written, without
+// English stemming; it matches whole words, not parts of words. A collection may have only one.
+sosSchema.index(
+  { description: 'text', address: 'text' },
+  { name: 'sos_text', weights: { description: 2, address: 1 }, default_language: 'none' },
+)
 
 export const SosRequest = model('SOSRequest', sosSchema, Collection.SOS_REQUESTS)
 

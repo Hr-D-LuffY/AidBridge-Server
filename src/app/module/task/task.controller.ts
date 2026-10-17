@@ -24,6 +24,17 @@ const listMyTasks = catchAsync(async (req, res) => {
   })
 })
 
+const getTask = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const task = await TaskService.getMyTask(getAuthUser(req).id, id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Task retrieved successfully',
+    data: task,
+  })
+})
+
 const respond = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const payload = respondSchema.parse(req.body)
@@ -71,4 +82,11 @@ const rateTask = catchAsync(async (req, res) => {
   })
 })
 
-export const TaskController = { listMyTasks, respond, updateStatus, getRatingStatus, rateTask }
+export const TaskController = {
+  listMyTasks,
+  getTask,
+  respond,
+  updateStatus,
+  getRatingStatus,
+  rateTask,
+}
