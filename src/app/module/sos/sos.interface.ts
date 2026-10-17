@@ -10,7 +10,9 @@ import {
   SosSort,
   SosStatus,
 } from '../../constants/sos'
+import { MAX_REQUIRED_SKILLS, Skill } from '../../constants/skill'
 import { coordinatesSchema, nearbyQueryShape } from '../../lib/geo'
+import { skillListSchema, skillSchema } from '../../lib/skillSchema'
 import { paginationQueryShape } from '../../utils/pagination'
 import { queryList } from '../../utils/queryList'
 import {
@@ -52,6 +54,7 @@ const prioritySchema = z.enum(Priority, {
 // 400 that names the field instead of being silently ignored.
 export const createSosSchema = z.strictObject({
   needs: needsSchema,
+  requiredSkills: skillListSchema(MAX_REQUIRED_SKILLS).optional(),
   description: descriptionSchema.optional(),
   coordinates: coordinatesSchema,
   address: addressSchema.optional(),
@@ -60,6 +63,7 @@ export const createSosSchema = z.strictObject({
 export const updateSosSchema = updateBodySchema(
   {
     needs: needsSchema.optional(),
+    requiredSkills: skillListSchema(MAX_REQUIRED_SKILLS).optional(),
     description: descriptionSchema.optional(),
     address: addressSchema.optional(),
     coordinates: coordinatesSchema.optional(),
@@ -126,9 +130,12 @@ export const listSosQuerySchema = z
     path: ['from'],
   })
 
+// Parse `normalizeQuery(req.query)`. `skills` keeps only the requests that want any of those skills
+// (asked for directly, or implied by what they need).
 export const nearbySosQuerySchema = z.object({
   ...paginationQueryShape,
   ...nearbyQueryShape,
+  skills: queryList(skillSchema, Object.keys(Skill).length),
 })
 
 export type CreateSosPayload = z.infer<typeof createSosSchema>

@@ -14,8 +14,9 @@ import {
   SosSort,
   SosStatus,
 } from '../../constants/sos'
+import type { Skill } from '../../constants/skill'
 import { type TaskProgressStatus, TaskStatus } from '../../constants/task'
-import { PRIORITY_ORDER, type Priority } from '../../constants/relief'
+import { PRIORITY_ORDER, type Priority, type ReliefCategory } from '../../constants/relief'
 import { AppError } from '../../errorHelpers/AppError'
 import {
   assertMediaStorageConfigured,
@@ -24,6 +25,7 @@ import {
   uploadMediaBuffer,
 } from '../../lib/cloudinary'
 import { approximateCoordinates, type Coordinates, geoNearStage, toGeoPoint } from '../../lib/geo'
+import { matchSkills, needsImplyingAny, wantedSkills } from '../../lib/skills'
 import { runInTransaction } from '../../lib/transaction'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
@@ -33,6 +35,7 @@ import { AuditService } from '../audit/audit.service'
 import { Incident } from '../incident/incident.model'
 import { NotificationService } from '../notification/notification.service'
 import { TaskService } from '../task/task.service'
+import { User } from '../user/user.model'
 import type {
   CreateSosPayload,
   ListSosQuery,
@@ -80,6 +83,7 @@ const toFullView = (sos: SosRecord) => ({
   victim: toPerson(sos.victim),
   assignedVolunteer: sos.assignedVolunteer ? toPerson(sos.assignedVolunteer) : null,
   needs: sos.needs,
+  requiredSkills: sos.requiredSkills ?? [],
   description: sos.description ?? null,
   media: sos.media.map((item) => ({
     id: String(item._id),
@@ -101,7 +105,8 @@ interface LimitedSource {
   _id: Types.ObjectId
   status: SosStatus
   priority: Priority
-  needs: string[]
+  needs: ReliefCategory[]
+  requiredSkills?: Skill[]
   description?: string | null
   victim: { name: string }
   location: { coordinates: number[] }
@@ -117,6 +122,7 @@ const toLimitedView = (sos: LimitedSource, distanceMeters?: number) => ({
   id: String(sos._id),
   victim: { name: firstName(sos.victim.name) },
   needs: sos.needs,
+  requiredSkills: sos.requiredSkills ?? [],
   description: sos.description ?? null,
   // Stored coordinates were validated on write, so they are a [lng, lat] pair.
   approximateLocation: toGeoPoint(approximateCoordinates(sos.location.coordinates as Coordinates)),
@@ -151,7 +157,7 @@ const openOwnedFilter = (id: string, victimId: string) => ({
 })
 
 const createSos = async (victimId: string, payload: CreateSosPayload) => {
-  const { needs, description, coordinates, address } = payload
+  const { needs, requiredSkills, description, coordinates, address } = payload
 
   // A soft limit: two requests created at the very same instant could both pass. That is accepted;
   // the limit exists to stop spam, not to be a security boundary.
@@ -169,6 +175,7 @@ const createSos = async (victimId: string, payload: CreateSosPayload) => {
   const created = await SosRequest.create({
     victim: victimId,
     needs,
+    requiredSkills,
     description,
     location: toGeoPoint(coordinates),
     address,
@@ -262,15 +269,28 @@ const listSos = async (viewer: TokenPayload, query: ListSosQuery) => {
 // Pending requests around a point, nearest first, for a volunteer's map. Always the limited view:
 // accepting a request is what unlocks the contact details.
 const listNearby = async (volunteerId: string, query: NearbySosQuery) => {
-  const { page, limit } = query
+  const { page, limit, skills } = query
 
   // Requests this volunteer already declined stay out of their list.
   const declinedIds = await TaskService.listRejectedSosIds(volunteerId)
+  const volunteer = await User.findById(volunteerId).select('skills').lean()
+  const mySkills = volunteer?.skills ?? []
   const [result] = await SosRequest.aggregate<{
     items: (LimitedSource & { distanceMeters: number })[]
     total: { count: number }[]
   }>([
-    geoNearStage(query, { status: SosStatus.PENDING, _id: { $nin: declinedIds } }, DISTANCE_FIELD),
+    geoNearStage(
+      query,
+      {
+        status: SosStatus.PENDING,
+        _id: { $nin: declinedIds },
+        // `?skills=`: wants any of them, asked for outright or implied by a need.
+        ...(skills && {
+          $or: [{ requiredSkills: { $in: skills } }, { needs: { $in: needsImplyingAny(skills) } }],
+        }),
+      },
+      DISTANCE_FIELD,
+    ),
     {
       $facet: {
         items: [{ $skip: getPagination(query).skip }, { $limit: limit }],
@@ -286,7 +306,15 @@ const listNearby = async (volunteerId: string, query: NearbySosQuery) => {
   })
 
   return {
-    items: withVictims.map((sos, index) => toLimitedView(sos, rows[index]?.distanceMeters)),
+    items: withVictims.map((sos, index) => {
+      const matchedSkills = matchSkills(wantedSkills(sos.requiredSkills, sos.needs), mySkills)
+      return {
+        ...toLimitedView(sos, rows[index]?.distanceMeters),
+        // Does this volunteer have what the request is looking for? A badge, never a filter.
+        skillMatch: matchedSkills.length > 0,
+        matchedSkills,
+      }
+    }),
     meta: buildMeta({ page, limit }, result?.total[0]?.count ?? 0),
   }
 }

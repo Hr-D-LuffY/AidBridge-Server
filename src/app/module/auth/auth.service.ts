@@ -4,7 +4,7 @@ import { Role } from '../../constants/role'
 import { AppError } from '../../errorHelpers/AppError'
 import { toGeoPoint } from '../../lib/geo'
 import { sendMail } from '../../lib/mailer'
-import { signAccessToken } from '../../utils/jwt'
+import { type TokenPayload, signAccessToken } from '../../utils/jwt'
 import { comparePassword, hashPassword } from '../../utils/password'
 import { generateResetToken, hashToken } from '../../utils/resetToken'
 import { SosService } from '../sos/sos.service'
@@ -17,6 +17,7 @@ import type {
   ResetPasswordPayload,
   UpdateMePayload,
 } from './auth.interface'
+import { VOLUNTEER_ONLY_FIELDS } from './auth.interface'
 
 const RESET_TOKEN_TTL_MINUTES = 30
 const MS_PER_MINUTE = 60 * 1000
@@ -143,12 +144,33 @@ const changePassword = async (userId: string, payload: ChangePasswordPayload) =>
 
 const getMe = async (userId: string) => toFullProfile(await findActiveUserOrThrow(userId))
 
-const updateMe = async (userId: string, payload: UpdateMePayload) => {
-  const { name, phone, location, isAvailable } = payload
+// Skills, languages and "on duty until" describe a volunteer. Anyone else sending them gets a 400 that
+// names the fields, rather than having them saved on an account that can never use them.
+const updateMe = async (viewer: TokenPayload, payload: UpdateMePayload) => {
+  const { name, phone, location, isAvailable, skills, languages, onDutyUntil } = payload
+
+  const volunteerOnlySent = VOLUNTEER_ONLY_FIELDS.filter((field) => payload[field] !== undefined)
+  if (viewer.role !== Role.VOLUNTEER && volunteerOnlySent.length > 0) {
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      `Only volunteers can set ${volunteerOnlySent.join(', ')}`,
+      volunteerOnlySent.map((field) => ({ field, message: 'Only volunteers can set this' })),
+    )
+  }
 
   const user = await User.findOneAndUpdate(
-    { _id: userId, isDeleted: false },
-    { $set: { name, phone, isAvailable, location: location && toGeoPoint(location) } },
+    { _id: viewer.id, isDeleted: false },
+    {
+      $set: {
+        name,
+        phone,
+        isAvailable,
+        skills,
+        languages,
+        onDutyUntil,
+        location: location && toGeoPoint(location),
+      },
+    },
     { returnDocument: 'after', runValidators: true },
   )
   if (!user) throw new AppError(httpStatus.NOT_FOUND, 'User not found')

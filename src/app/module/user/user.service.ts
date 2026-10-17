@@ -9,6 +9,7 @@ import {
 import { Role } from '../../constants/role'
 import { BLOCKED_CLOSE_REASON } from '../../constants/user'
 import { AppError } from '../../errorHelpers/AppError'
+import { isOnDuty } from '../../lib/availability'
 import { runInTransaction } from '../../lib/transaction'
 import { type DateRange, inRange } from '../../utils/dateRange'
 import type { TokenPayload } from '../../utils/jwt'
@@ -29,6 +30,10 @@ import { User, type UserDocument } from './user.model'
 //   everyone else -> limited profile
 // A victim and the volunteer assigned to their SOS see each other's phone through the SOS request
 // itself (GET /sos/:id), so this view needs no special case for them.
+// On duty only means something for a volunteer; for every other role it is simply false.
+const isVolunteerOnDuty = (user: UserDocument) =>
+  user.role === Role.VOLUNTEER && isOnDuty(user, new Date())
+
 export const toLimitedProfile = (user: UserDocument) => ({
   id: String(user._id),
   name: user.name,
@@ -46,6 +51,12 @@ export const toFullProfile = (user: UserDocument) => ({
     ? { type: user.location.type, coordinates: user.location.coordinates }
     : null,
   // Only an admin or the user themself gets this profile, and a blocked user cannot read their own.
+  // Volunteer profile (empty and null for everyone else). `isOnDuty` is the effective state: the
+  // availability switch AND an unexpired "on duty until".
+  skills: user.skills ?? [],
+  languages: user.languages ?? [],
+  onDutyUntil: user.onDutyUntil ?? null,
+  isOnDuty: isVolunteerOnDuty(user),
   isBlocked: user.isBlocked,
   blockedAt: user.blockedAt ?? null,
   blockReason: user.blockReason ?? null,
@@ -57,6 +68,9 @@ const toContactProfile = (user: UserDocument) => ({
   ...toLimitedProfile(user),
   email: user.email,
   phone: user.phone,
+  skills: user.skills ?? [],
+  languages: user.languages ?? [],
+  isOnDuty: isVolunteerOnDuty(user),
 })
 
 export const toUserView = (viewer: TokenPayload, user: UserDocument) => {

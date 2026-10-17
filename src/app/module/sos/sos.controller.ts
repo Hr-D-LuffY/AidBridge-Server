@@ -38,7 +38,7 @@ const listSos = catchAsync(async (req, res) => {
 })
 
 const listNearby = catchAsync(async (req, res) => {
-  const query = nearbySosQuerySchema.parse(req.query)
+  const query = nearbySosQuerySchema.parse(normalizeQuery(req.query))
   const { items, meta } = await SosService.listNearby(getAuthUser(req).id, query)
 
   sendResponse(res, {

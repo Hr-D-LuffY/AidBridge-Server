@@ -82,7 +82,7 @@ const getMe = catchAsync(async (req, res) => {
 
 const updateMe = catchAsync(async (req, res) => {
   const payload = updateMeSchema.parse(req.body)
-  const user = await AuthService.updateMe(getAuthUser(req).id, payload)
+  const user = await AuthService.updateMe(getAuthUser(req), payload)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,

@@ -21,6 +21,7 @@ import { ALL_ROLES_TARGET } from '../src/app/constants/notification'
 import { DisasterType, Priority, ReliefCategory } from '../src/app/constants/relief'
 import { MediaType, ResolvedBy, SosStatus } from '../src/app/constants/sos'
 import { TaskStatus } from '../src/app/constants/task'
+import type { Skill } from '../src/app/constants/skill'
 import { VolunteerRequestStatus } from '../src/app/constants/volunteerRequest'
 import { type Coordinates, toGeoPoint } from '../src/app/lib/geo'
 import { connectDB, disconnectDB } from '../src/app/lib/db'
@@ -63,6 +64,9 @@ interface PersonSeed {
   lng: number
   lat: number
   isAvailable?: boolean
+  // Volunteers only. Skills use the Skill values from constants/skill.ts.
+  skills?: Skill[]
+  languages?: string[]
   joined: Date
 }
 
@@ -75,14 +79,14 @@ const PEOPLE: PersonSeed[] = [
   { key: 'ngo2', name: 'Jonoseba Aid Network', email: 'jonoseba.aid', role: Role.NGO, phone: '+8801811000002', password: SHARED_PASSWORD, lng: 90.1266, lat: 22.0953, joined: ago({ d: 105 }) },
   { key: 'ngo3', name: 'Surma Relief Trust', email: 'surma.relief', role: Role.NGO, phone: '+8801811000003', password: SHARED_PASSWORD, lng: 91.395, lat: 25.0715, joined: ago({ d: 95 }) },
   // Volunteers (approved through a volunteer request, see VOLUNTEER_REQUESTS)
-  { key: 'vol1', name: 'Tanvir Ahmed', email: 'volunteer', role: Role.VOLUNTEER, phone: '+8801911000001', password: 'Volunteer@123', lng: 91.8712, lat: 24.9001, joined: ago({ d: 90 }) },
-  { key: 'vol2', name: 'Farhana Akter', email: 'farhana.akter', role: Role.VOLUNTEER, phone: '+8801911000002', password: SHARED_PASSWORD, lng: 91.4101, lat: 25.0602, joined: ago({ d: 88 }) },
-  { key: 'vol3', name: 'Mizanur Rahman', email: 'mizanur.rahman', role: Role.VOLUNTEER, phone: '+8801911000003', password: SHARED_PASSWORD, lng: 91.3912, lat: 25.0688, joined: ago({ d: 85 }) },
-  { key: 'vol4', name: 'Sadia Islam', email: 'sadia.islam', role: Role.VOLUNTEER, phone: '+8801911000004', password: SHARED_PASSWORD, lng: 90.4003, lat: 23.7201, joined: ago({ d: 80 }) },
-  { key: 'vol5', name: 'Jahid Hasan', email: 'jahid.hasan', role: Role.VOLUNTEER, phone: '+8801911000005', password: SHARED_PASSWORD, lng: 90.1301, lat: 22.1002, joined: ago({ d: 75 }) },
-  { key: 'vol6', name: 'Rubel Mia', email: 'rubel.mia', role: Role.VOLUNTEER, phone: '+8801911000006', password: SHARED_PASSWORD, lng: 90.2402, lat: 21.9934, joined: ago({ d: 70 }) },
-  { key: 'vol7', name: 'Anika Tabassum', email: 'anika.tabassum', role: Role.VOLUNTEER, phone: '+8801911000007', password: SHARED_PASSWORD, lng: 92.2201, lat: 22.1987, joined: ago({ d: 65 }) },
-  { key: 'vol8', name: 'Kamal Hossain', email: 'kamal.hossain', role: Role.VOLUNTEER, phone: '+8801911000008', password: SHARED_PASSWORD, lng: 91.8601, lat: 24.9075, isAvailable: false, joined: ago({ d: 60 }) },
+  { key: 'vol1', name: 'Tanvir Ahmed', email: 'volunteer', role: Role.VOLUNTEER, phone: '+8801911000001', password: 'Volunteer@123', lng: 91.8712, lat: 24.9001, skills: ['driving', 'food_distribution'], languages: ['Bangla', 'English'], joined: ago({ d: 90 }) },
+  { key: 'vol2', name: 'Farhana Akter', email: 'farhana.akter', role: Role.VOLUNTEER, phone: '+8801911000002', password: SHARED_PASSWORD, lng: 91.4101, lat: 25.0602, skills: ['medical', 'first_aid'], languages: ['Bangla', 'English'], joined: ago({ d: 88 }) },
+  { key: 'vol3', name: 'Mizanur Rahman', email: 'mizanur.rahman', role: Role.VOLUNTEER, phone: '+8801911000003', password: SHARED_PASSWORD, lng: 91.3912, lat: 25.0688, skills: ['boat', 'search_rescue'], languages: ['Bangla'], joined: ago({ d: 85 }) },
+  { key: 'vol4', name: 'Sadia Islam', email: 'sadia.islam', role: Role.VOLUNTEER, phone: '+8801911000004', password: SHARED_PASSWORD, lng: 90.4003, lat: 23.7201, skills: ['first_aid', 'counselling'], languages: ['Bangla', 'English', 'Hindi'], joined: ago({ d: 80 }) },
+  { key: 'vol5', name: 'Jahid Hasan', email: 'jahid.hasan', role: Role.VOLUNTEER, phone: '+8801911000005', password: SHARED_PASSWORD, lng: 90.1301, lat: 22.1002, skills: ['boat', 'driving'], languages: ['Bangla'], joined: ago({ d: 75 }) },
+  { key: 'vol6', name: 'Rubel Mia', email: 'rubel.mia', role: Role.VOLUNTEER, phone: '+8801911000006', password: SHARED_PASSWORD, lng: 90.2402, lat: 21.9934, skills: ['search_rescue', 'boat'], languages: ['Bangla'], joined: ago({ d: 70 }) },
+  { key: 'vol7', name: 'Anika Tabassum', email: 'anika.tabassum', role: Role.VOLUNTEER, phone: '+8801911000007', password: SHARED_PASSWORD, lng: 92.2201, lat: 22.1987, skills: ['shelter_management', 'food_distribution'], languages: ['Bangla', 'English'], joined: ago({ d: 65 }) },
+  { key: 'vol8', name: 'Kamal Hossain', email: 'kamal.hossain', role: Role.VOLUNTEER, phone: '+8801911000008', password: SHARED_PASSWORD, lng: 91.8601, lat: 24.9075, isAvailable: false, skills: ['driving'], languages: ['Bangla'], joined: ago({ d: 60 }) },
   // Victims (the public sign-up role)
   { key: 'v1', name: 'Shirin Begum', email: 'victim', role: Role.VICTIM, phone: '+8801611000001', password: 'Victim@12345', lng: 91.3801, lat: 25.0554, joined: ago({ d: 50 }) },
   { key: 'v2', name: 'Abdul Karim', email: 'abdul.karim', role: Role.VICTIM, phone: '+8801611000002', password: SHARED_PASSWORD, lng: 91.8744, lat: 24.8977, joined: ago({ d: 45 }) },
@@ -616,6 +620,8 @@ const main = async () => {
         role: person.role,
         phone: person.phone,
         isAvailable: person.isAvailable ?? true,
+        skills: person.skills ?? [],
+        languages: person.languages ?? [],
         location: point(person.lng, person.lat),
         reliabilityScore,
         totalRatings: scores.length,

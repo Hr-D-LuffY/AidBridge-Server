@@ -10,12 +10,14 @@ import {
   SosStatus,
 } from '../../constants/sos'
 import { Priority, ReliefCategory } from '../../constants/relief'
+import { Skill } from '../../constants/skill'
 import { geoPointSchema } from '../../lib/geoPointSchema'
 
 const NEED_VALUES: ReliefCategory[] = Object.values(ReliefCategory)
 const PRIORITY_VALUES: Priority[] = Object.values(Priority)
 const STATUS_VALUES: SosStatus[] = Object.values(SosStatus)
 const RESOLVED_BY_VALUES: ResolvedBy[] = Object.values(ResolvedBy)
+const SKILL_VALUES: Skill[] = Object.values(Skill)
 const MEDIA_TYPE_VALUES: MediaType[] = Object.values(MediaType)
 
 // One uploaded photo or video. `publicId` is what Cloudinary needs to delete the file; it is never
@@ -40,6 +42,8 @@ const sosSchema = new Schema(
       },
     },
     description: { type: String, trim: true, maxlength: MAX_SOS_DESCRIPTION_LENGTH },
+    // Skills the victim asked for ("special help needed"). Optional; only ever boosts a match.
+    requiredSkills: { type: [{ type: String, enum: SKILL_VALUES }], default: [] },
     media: {
       type: [mediaSchema],
       validate: {
