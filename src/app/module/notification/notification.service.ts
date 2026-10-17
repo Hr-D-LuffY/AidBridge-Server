@@ -1,5 +1,6 @@
 import httpStatus from 'http-status'
 import type { QueryFilter, Types } from 'mongoose'
+import { AuditAction, AuditTargetType } from '../../constants/audit'
 import {
   BROADCAST_EMAIL_BATCH_SIZE,
   BROADCAST_EMAIL_SUBJECT_PREFIX,
@@ -12,6 +13,7 @@ import { sendMail } from '../../lib/mailer'
 import { escapeHtml } from '../../utils/escapeHtml'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
+import { AuditService } from '../audit/audit.service'
 import { UserService } from '../user/user.service'
 import type { CreateNotificationPayload, ListNotificationsQuery } from './notification.interface'
 import { Notification, type NotificationDocument } from './notification.model'
@@ -112,14 +114,14 @@ const emailBroadcast = async (title: string, message: string, targets: Notificat
   }
 }
 
-const createNotification = async (adminId: string, payload: CreateNotificationPayload) => {
+const createNotification = async (admin: TokenPayload, payload: CreateNotificationPayload) => {
   const { title, message, targetRoles, isEmergencyBroadcast } = payload
   const notification = await Notification.create({
     title,
     message,
     targetRoles,
     isEmergencyBroadcast,
-    createdBy: adminId,
+    createdBy: admin.id,
   })
 
   if (isEmergencyBroadcast) {
@@ -128,7 +130,15 @@ const createNotification = async (adminId: string, payload: CreateNotificationPa
     })
   }
 
-  return toNotificationView(notification, adminId)
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.BROADCAST_SENT,
+    targetType: AuditTargetType.NOTIFICATION,
+    targetId: String(notification._id),
+    summary: `Sent ${isEmergencyBroadcast ? 'an emergency ' : 'a '}broadcast "${title}" to ${targetRoles.join(', ')}`,
+    meta: { targetRoles, isEmergencyBroadcast },
+  })
+  return toNotificationView(notification, admin.id)
 }
 
 // For other modules: tell one person something happened (a volunteer request was decided, the victim

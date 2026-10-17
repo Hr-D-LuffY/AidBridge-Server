@@ -1,5 +1,6 @@
 import httpStatus from 'http-status'
 import type { ClientSession, QueryFilter } from 'mongoose'
+import { AuditAction, AuditTargetType } from '../../constants/audit'
 import { ALL_ROLES_TARGET, type NotificationTarget } from '../../constants/notification'
 import { Role } from '../../constants/role'
 import { BLOCKED_CLOSE_REASON } from '../../constants/user'
@@ -9,6 +10,7 @@ import { type DateRange, inRange } from '../../utils/dateRange'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { hashPassword } from '../../utils/password'
+import { AuditService } from '../audit/audit.service'
 import { NotificationService } from '../notification/notification.service'
 import { SosService } from '../sos/sos.service'
 import type { BlockUserPayload, CreateAccountPayload, ListUsersQuery } from './user.interface'
@@ -106,7 +108,7 @@ const isActiveVolunteer = async (id: string) =>
 // Admin-only. The only way an NGO or another admin account comes into existence (the very first
 // admin is created by the seed script). Returns the new profile but no token: the admin hands the
 // credentials over and the new user logs in themselves.
-const createAccount = async (payload: CreateAccountPayload) => {
+const createAccount = async (admin: TokenPayload, payload: CreateAccountPayload) => {
   const { name, email, password, role, phone } = payload
 
   if (await User.exists({ email })) {
@@ -120,6 +122,15 @@ const createAccount = async (payload: CreateAccountPayload) => {
     role,
     phone,
   })
+
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.ACCOUNT_CREATED,
+    targetType: AuditTargetType.USER,
+    targetId: String(user._id),
+    summary: `Created ${role} account for ${user.name}`,
+    meta: { role },
+  })
   return toFullProfile(user)
 }
 
@@ -129,7 +140,7 @@ const BLOCK_NOT_FOUND_MESSAGE = 'User not found'
 // request (see auth()). Admin accounts cannot be blocked (that includes the caller's own). Blocking a
 // victim also closes every request of theirs that is not finished, in the same transaction, so a scam
 // request leaves the volunteers' maps at once; the volunteers on them are told after it commits.
-const blockUser = async (id: string, payload: BlockUserPayload) => {
+const blockUser = async (admin: TokenPayload, id: string, payload: BlockUserPayload) => {
   const existing = await User.findOne({ _id: id, isDeleted: false })
   if (!existing) throw new AppError(httpStatus.NOT_FOUND, BLOCK_NOT_FOUND_MESSAGE)
   if (existing.role === Role.ADMIN) {
@@ -171,11 +182,19 @@ const blockUser = async (id: string, payload: BlockUserPayload) => {
     )
   }
 
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.USER_BLOCKED,
+    targetType: AuditTargetType.USER,
+    targetId: id,
+    summary: `Blocked ${blocked.name} (${blocked.role})`,
+    meta: { role: blocked.role, reason: payload.reason ?? null },
+  })
   return toFullProfile(blocked)
 }
 
 // Admin-only. Lifts a block. The requests that were closed with it stay closed.
-const unblockUser = async (id: string) => {
+const unblockUser = async (admin: TokenPayload, id: string) => {
   const existing = await User.findOne({ _id: id, isDeleted: false })
   if (!existing) throw new AppError(httpStatus.NOT_FOUND, BLOCK_NOT_FOUND_MESSAGE)
   if (!existing.isBlocked) throw new AppError(httpStatus.CONFLICT, 'This account is not blocked')
@@ -187,6 +206,15 @@ const unblockUser = async (id: string) => {
   )
   if (!updated)
     throw new AppError(httpStatus.CONFLICT, 'This account was just changed. Please try again')
+
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.USER_UNBLOCKED,
+    targetType: AuditTargetType.USER,
+    targetId: id,
+    summary: `Unblocked ${updated.name} (${updated.role})`,
+    meta: { role: updated.role },
+  })
   return toFullProfile(updated)
 }
 

@@ -30,7 +30,7 @@ const getUnreadCount = catchAsync(async (req, res) => {
 
 const createNotification = catchAsync(async (req, res) => {
   const payload = createNotificationSchema.parse(req.body)
-  const notification = await NotificationService.createNotification(getAuthUser(req).id, payload)
+  const notification = await NotificationService.createNotification(getAuthUser(req), payload)
 
   sendResponse(res, {
     statusCode: httpStatus.CREATED,

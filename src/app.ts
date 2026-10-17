@@ -7,6 +7,7 @@ import { globalErrorHandler } from './app/middleware/globalErrorHandler'
 import { notFound } from './app/middleware/notFound'
 import { authLimiter, generalLimiter } from './app/middleware/rateLimiter'
 import { AnalyticsRoutes } from './app/module/analytics/analytics.route'
+import { AuditRoutes } from './app/module/audit/audit.route'
 import { AuthRoutes } from './app/module/auth/auth.route'
 import { CampRoutes } from './app/module/camp/camp.route'
 import { DistributionRoutes } from './app/module/distribution/distribution.route'
@@ -64,6 +65,7 @@ app.use('/api/v1/distribution', DistributionRoutes)
 app.use('/api/v1/incidents', IncidentRoutes)
 app.use('/api/v1/notifications', NotificationRoutes)
 app.use('/api/v1/analytics', AnalyticsRoutes)
+app.use('/api/v1/audit-logs', AuditRoutes)
 
 app.use(notFound)
 app.use(globalErrorHandler)

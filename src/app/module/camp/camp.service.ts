@@ -1,5 +1,6 @@
 import httpStatus from 'http-status'
 import type { QueryFilter, Types } from 'mongoose'
+import { AuditAction, AuditTargetType } from '../../constants/audit'
 import { Role } from '../../constants/role'
 import { AppError } from '../../errorHelpers/AppError'
 import { geoNearStage, toGeoPoint } from '../../lib/geo'
@@ -7,6 +8,7 @@ import { changeOccupancy, listStockForCamps, unlinkCampStock } from '../../lib/s
 import { runInTransaction } from '../../lib/transaction'
 import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
+import { AuditService } from '../audit/audit.service'
 import { User } from '../user/user.model'
 import { UserService } from '../user/user.service'
 import type {
@@ -103,6 +105,25 @@ const manageableFilter = (viewer: TokenPayload, id: string): QueryFilter<unknown
   isDeleted: false,
   ...scopeTo(viewer),
 })
+
+// An NGO working on its own camps is not audited; an admin acting on an NGO's camp is.
+const auditAsAdmin = async (
+  viewer: TokenPayload,
+  action: AuditAction,
+  campId: string,
+  summary: string,
+  meta: Record<string, string>,
+) => {
+  if (viewer.role !== Role.ADMIN) return
+  await AuditService.record({
+    actor: viewer,
+    action,
+    targetType: AuditTargetType.CAMP,
+    targetId: campId,
+    summary,
+    meta,
+  })
+}
 
 const getCampView = async (id: string) => {
   const [camp] = await findPopulated({ _id: id })
@@ -265,7 +286,7 @@ const updateCamp = async (viewer: TokenPayload, id: string, payload: UpdateCampP
 
 // Soft delete. The camp's stock goes back to the NGO's general store, in the same transaction.
 const deleteCamp = async (viewer: TokenPayload, id: string) => {
-  await runInTransaction(async (session) => {
+  const camp = await runInTransaction(async (session) => {
     const deleted = await Camp.findOneAndUpdate(
       manageableFilter(viewer, id),
       { $set: { isDeleted: true, deletedAt: new Date(), isActive: false } },
@@ -273,6 +294,11 @@ const deleteCamp = async (viewer: TokenPayload, id: string) => {
     )
     if (!deleted) throw new AppError(httpStatus.NOT_FOUND, CAMP_NOT_FOUND_MESSAGE)
     await unlinkCampStock(session, id)
+    return deleted
+  })
+
+  await auditAsAdmin(viewer, AuditAction.CAMP_DELETED, id, `Deleted camp "${camp.name}"`, {
+    ngoId: String(camp.ngo),
   })
 }
 
@@ -290,7 +316,17 @@ const assignVolunteer = async (viewer: TokenPayload, id: string, volunteerId: st
     $addToSet: { assignedVolunteers: volunteerId },
   })
   if (!updated) throw new AppError(httpStatus.NOT_FOUND, CAMP_NOT_FOUND_MESSAGE)
-  return getCampView(id)
+
+  const view = await getCampView(id)
+  const volunteerName = view.assignedVolunteers.find((v) => v.id === volunteerId)?.name
+  await auditAsAdmin(
+    viewer,
+    AuditAction.CAMP_VOLUNTEER_ASSIGNED,
+    id,
+    `Assigned ${volunteerName ?? 'a volunteer'} to camp "${view.name}"`,
+    { volunteerId },
+  )
+  return view
 }
 
 const unassignVolunteer = async (viewer: TokenPayload, id: string, volunteerId: string) => {
@@ -304,6 +340,14 @@ const unassignVolunteer = async (viewer: TokenPayload, id: string, volunteerId: 
     }
     throw new AppError(httpStatus.NOT_FOUND, 'That volunteer is not assigned to this camp')
   }
+
+  await auditAsAdmin(
+    viewer,
+    AuditAction.CAMP_VOLUNTEER_UNASSIGNED,
+    id,
+    `Removed ${(await UserService.getDisplayName(volunteerId)) ?? 'a volunteer'} from camp "${updated.name}"`,
+    { volunteerId },
+  )
   return getCampView(id)
 }
 

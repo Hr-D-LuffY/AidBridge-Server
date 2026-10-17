@@ -1,10 +1,13 @@
 import httpStatus from 'http-status'
 import type { QueryFilter, Types, UpdateQuery } from 'mongoose'
+import { AuditAction, AuditTargetType, MAX_AUDIT_META_IDS } from '../../constants/audit'
 import { IncidentStatus, SosLinkAction } from '../../constants/incident'
 import { type DisasterType, Priority } from '../../constants/relief'
 import { AppError } from '../../errorHelpers/AppError'
 import { toGeoPoint } from '../../lib/geo'
+import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
+import { AuditService } from '../audit/audit.service'
 import { SosService } from '../sos/sos.service'
 import type {
   CreateIncidentPayload,
@@ -86,12 +89,21 @@ const getIncidentView = async (id: string, options: { includeLinks?: boolean } =
   return view
 }
 
-const createIncident = async (adminId: string, payload: CreateIncidentPayload) => {
+const createIncident = async (admin: TokenPayload, payload: CreateIncidentPayload) => {
   const { coordinates, ...fields } = payload
   const incident = await Incident.create({
     ...fields,
-    createdBy: adminId,
+    createdBy: admin.id,
     location: toGeoPoint(coordinates),
+  })
+
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.INCIDENT_CREATED,
+    targetType: AuditTargetType.INCIDENT,
+    targetId: String(incident._id),
+    summary: `Created incident "${incident.title}"`,
+    meta: { disasterType: incident.disasterType, priority: incident.priority },
   })
   return getIncidentView(String(incident._id))
 }
@@ -118,7 +130,7 @@ const listIncidents = async (query: ListIncidentsQuery) => {
 
 // Resolving closes the incident and stamps an end date (now, unless one is given); reopening clears
 // it. The end date can never fall before the start date, whichever of the two is being changed.
-const updateIncident = async (id: string, payload: UpdateIncidentPayload) => {
+const updateIncident = async (admin: TokenPayload, id: string, payload: UpdateIncidentPayload) => {
   const existing = await Incident.findOne({ _id: id, ...NOT_DELETED }).lean()
   if (!existing) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
 
@@ -152,26 +164,53 @@ const updateIncident = async (id: string, payload: UpdateIncidentPayload) => {
     runValidators: true,
   })
   if (!updated) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+
+  // Only the names of the fields that were sent, never their values (a description can be long).
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.INCIDENT_UPDATED,
+    targetType: AuditTargetType.INCIDENT,
+    targetId: id,
+    summary: `Updated incident "${existing.title}"`,
+    meta: {
+      fields: [...Object.keys(set)].map((field) => (field === 'location' ? 'coordinates' : field)),
+      statusFrom: existing.status,
+      statusTo: nextStatus,
+    },
+  })
   return getIncidentView(id)
 }
 
-const setPriority = async (id: string, priority: Priority) => {
-  const updated = await Incident.findOneAndUpdate(
+// `findOneAndUpdate` returns the incident as it was before the change: the old priority for the entry.
+const setPriority = async (admin: TokenPayload, id: string, priority: Priority) => {
+  const before = await Incident.findOneAndUpdate(
     { _id: id, ...NOT_DELETED },
     { $set: { priority } },
     { runValidators: true },
   )
-  if (!updated) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+  if (!before) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+
+  if (before.priority !== priority) {
+    await AuditService.record({
+      actor: admin,
+      action: AuditAction.INCIDENT_PRIORITY_CHANGED,
+      targetType: AuditTargetType.INCIDENT,
+      targetId: id,
+      summary: `Changed priority of incident "${before.title}" from ${before.priority} to ${priority}`,
+      meta: { from: before.priority, to: priority },
+    })
+  }
   return getIncidentView(id)
 }
 
 // Link SOS requests to the incident, or take them off again. Linking something that is already
 // linked changes nothing. Every id must be a real request, so a typo can't be linked silently.
-const linkRequests = async (id: string, payload: LinkSosPayload) => {
+const linkRequests = async (admin: TokenPayload, id: string, payload: LinkSosPayload) => {
   const { action, sosRequestIds } = payload
-  if (!(await Incident.exists({ _id: id, ...NOT_DELETED }))) {
-    throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
-  }
+  const incident = await Incident.findOne({ _id: id, ...NOT_DELETED })
+    .select('title')
+    .lean()
+  if (!incident) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
 
   if (action === SosLinkAction.LINK) {
     const existing = new Set(await SosService.getExistingIds(sosRequestIds))
@@ -194,16 +233,39 @@ const linkRequests = async (id: string, payload: LinkSosPayload) => {
     )
   }
 
+  const linking = action === SosLinkAction.LINK
+  await AuditService.record({
+    actor: admin,
+    action: linking ? AuditAction.INCIDENT_SOS_LINKED : AuditAction.INCIDENT_SOS_UNLINKED,
+    targetType: AuditTargetType.INCIDENT,
+    targetId: id,
+    summary: `${linking ? 'Linked' : 'Unlinked'} ${sosRequestIds.length} SOS request(s) ${
+      linking ? 'to' : 'from'
+    } incident "${incident.title}"`,
+    meta: {
+      count: sosRequestIds.length,
+      sosRequestIds: sosRequestIds.slice(0, MAX_AUDIT_META_IDS),
+    },
+  })
   return getIncidentView(id, { includeLinks: true })
 }
 
 // Soft delete: hidden from every list, kept in the database as a record.
-const deleteIncident = async (id: string) => {
+const deleteIncident = async (admin: TokenPayload, id: string) => {
   const deleted = await Incident.findOneAndUpdate(
     { _id: id, ...NOT_DELETED },
     { $set: { isDeleted: true, deletedAt: new Date() } },
   )
   if (!deleted) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.INCIDENT_DELETED,
+    targetType: AuditTargetType.INCIDENT,
+    targetId: id,
+    summary: `Deleted incident "${deleted.title}"`,
+    meta: { linkedRequests: deleted.sosRequests.length },
+  })
 }
 
 // Dashboard numbers for the admin: all incidents, the ones still active, and the active ones at

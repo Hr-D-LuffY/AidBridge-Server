@@ -48,7 +48,7 @@ const listRequests = catchAsync(async (req, res) => {
 const approveRequest = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const payload = reviewVolunteerRequestSchema.parse(req.body ?? {})
-  const request = await VolunteerRequestService.approveRequest(getAuthUser(req).id, id, payload)
+  const request = await VolunteerRequestService.approveRequest(getAuthUser(req), id, payload)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -60,7 +60,7 @@ const approveRequest = catchAsync(async (req, res) => {
 const rejectRequest = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const payload = reviewVolunteerRequestSchema.parse(req.body ?? {})
-  const request = await VolunteerRequestService.rejectRequest(getAuthUser(req).id, id, payload)
+  const request = await VolunteerRequestService.rejectRequest(getAuthUser(req), id, payload)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,

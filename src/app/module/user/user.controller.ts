@@ -32,7 +32,7 @@ const getUserById = catchAsync(async (req, res) => {
 
 const createAccount = catchAsync(async (req, res) => {
   const payload = createAccountSchema.parse(req.body)
-  const user = await UserService.createAccount(payload)
+  const user = await UserService.createAccount(getAuthUser(req), payload)
 
   sendResponse(res, {
     statusCode: httpStatus.CREATED,
@@ -44,7 +44,7 @@ const createAccount = catchAsync(async (req, res) => {
 const blockUser = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const payload = blockUserSchema.parse(req.body ?? {})
-  const user = await UserService.blockUser(id, payload)
+  const user = await UserService.blockUser(getAuthUser(req), id, payload)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -55,7 +55,7 @@ const blockUser = catchAsync(async (req, res) => {
 
 const unblockUser = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
-  const user = await UserService.unblockUser(id)
+  const user = await UserService.unblockUser(getAuthUser(req), id)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,

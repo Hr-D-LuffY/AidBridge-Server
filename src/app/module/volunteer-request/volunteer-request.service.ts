@@ -1,9 +1,12 @@
 import httpStatus from 'http-status'
 import mongoose, { type QueryFilter } from 'mongoose'
+import { AuditAction, AuditTargetType } from '../../constants/audit'
 import { Role } from '../../constants/role'
 import { VolunteerRequestStatus } from '../../constants/volunteerRequest'
 import { AppError } from '../../errorHelpers/AppError'
+import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
+import { AuditService } from '../audit/audit.service'
 import { NotificationService } from '../notification/notification.service'
 import { User } from '../user/user.model'
 import type {
@@ -57,6 +60,10 @@ const toRequestView = (request: RequestFields, user?: PopulatedUser) => ({
   createdAt: request.createdAt,
   updatedAt: request.updatedAt,
 })
+
+// Who applied, for the audit summary. Falls back to the id if the account is gone.
+const applicantName = async (userId: unknown) =>
+  (await User.findById(userId).select('name').lean())?.name ?? String(userId)
 
 // The admin's optional note, ready to append to a sentence.
 const noteSuffix = (note?: string) => (note ? ` Note from the admin: ${note}` : '')
@@ -134,7 +141,7 @@ const explainUnclaimable = async (requestId: string) => {
 // the user's role becomes `volunteer` — so they share one transaction. The request is claimed with a
 // `status: pending` filter, so two admins approving at once can't both succeed.
 const approveRequest = async (
-  adminId: string,
+  admin: TokenPayload,
   requestId: string,
   payload: ReviewVolunteerRequestPayload,
 ) => {
@@ -148,7 +155,7 @@ const approveRequest = async (
         {
           $set: {
             status: VolunteerRequestStatus.APPROVED,
-            reviewedBy: adminId,
+            reviewedBy: admin.id,
             reviewedAt: new Date(),
             reviewNote: payload.note,
           },
@@ -180,6 +187,14 @@ const approveRequest = async (
       'Volunteer request approved',
       `You are now a volunteer.${noteSuffix(payload.note)}`,
     )
+    await AuditService.record({
+      actor: admin,
+      action: AuditAction.VOLUNTEER_REQUEST_APPROVED,
+      targetType: AuditTargetType.VOLUNTEER_REQUEST,
+      targetId: requestId,
+      summary: `Approved the volunteer request of ${await applicantName(approved.user)}`,
+      meta: { applicantId: String(approved.user), note: payload.note ?? null },
+    })
     return toRequestView(approved)
   } finally {
     await session.endSession()
@@ -187,7 +202,7 @@ const approveRequest = async (
 }
 
 const rejectRequest = async (
-  adminId: string,
+  admin: TokenPayload,
   requestId: string,
   payload: ReviewVolunteerRequestPayload,
 ) => {
@@ -196,7 +211,7 @@ const rejectRequest = async (
     {
       $set: {
         status: VolunteerRequestStatus.REJECTED,
-        reviewedBy: adminId,
+        reviewedBy: admin.id,
         reviewedAt: new Date(),
         reviewNote: payload.note,
       },
@@ -210,6 +225,14 @@ const rejectRequest = async (
     'Volunteer request not approved',
     `An admin reviewed your volunteer request and did not approve it.${noteSuffix(payload.note)}`,
   )
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.VOLUNTEER_REQUEST_REJECTED,
+    targetType: AuditTargetType.VOLUNTEER_REQUEST,
+    targetId: requestId,
+    summary: `Rejected the volunteer request of ${await applicantName(request.user)}`,
+    meta: { applicantId: String(request.user), note: payload.note ?? null },
+  })
   return toRequestView(request)
 }
 

@@ -121,7 +121,7 @@ const rejectSos = catchAsync(async (req, res) => {
 const setPriority = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const { priority } = setPrioritySchema.parse(req.body)
-  const sos = await SosService.setPriority(id, priority)
+  const sos = await SosService.setPriority(getAuthUser(req), id, priority)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,

@@ -14,7 +14,7 @@ import { IncidentService } from './incident.service'
 
 const createIncident = catchAsync(async (req, res) => {
   const payload = createIncidentSchema.parse(req.body)
-  const incident = await IncidentService.createIncident(getAuthUser(req).id, payload)
+  const incident = await IncidentService.createIncident(getAuthUser(req), payload)
 
   sendResponse(res, {
     statusCode: httpStatus.CREATED,
@@ -38,7 +38,7 @@ const listIncidents = catchAsync(async (req, res) => {
 const updateIncident = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const payload = updateIncidentSchema.parse(req.body)
-  const incident = await IncidentService.updateIncident(id, payload)
+  const incident = await IncidentService.updateIncident(getAuthUser(req), id, payload)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -51,7 +51,7 @@ const updateIncident = catchAsync(async (req, res) => {
 const setPriority = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const { priority } = setIncidentPrioritySchema.parse(req.body)
-  const incident = await IncidentService.setPriority(id, priority)
+  const incident = await IncidentService.setPriority(getAuthUser(req), id, priority)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -63,7 +63,7 @@ const setPriority = catchAsync(async (req, res) => {
 const linkRequests = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const payload = linkSosSchema.parse(req.body)
-  const incident = await IncidentService.linkRequests(id, payload)
+  const incident = await IncidentService.linkRequests(getAuthUser(req), id, payload)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,
@@ -74,7 +74,7 @@ const linkRequests = catchAsync(async (req, res) => {
 
 const deleteIncident = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
-  await IncidentService.deleteIncident(id)
+  await IncidentService.deleteIncident(getAuthUser(req), id)
 
   sendResponse(res, {
     statusCode: httpStatus.OK,

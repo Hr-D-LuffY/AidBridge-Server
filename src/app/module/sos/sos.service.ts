@@ -1,5 +1,6 @@
 import httpStatus from 'http-status'
 import type { ClientSession, QueryFilter, Types } from 'mongoose'
+import { AuditAction, AuditTargetType } from '../../constants/audit'
 import { Role } from '../../constants/role'
 import {
   MAX_ACTIVE_SOS_PER_VICTIM,
@@ -26,6 +27,7 @@ import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { type DateRange, inRange } from '../../utils/dateRange'
 import { assertTransition } from '../../utils/transitions'
+import { AuditService } from '../audit/audit.service'
 import { NotificationService } from '../notification/notification.service'
 import { TaskService } from '../task/task.service'
 import type {
@@ -415,13 +417,26 @@ const closeUnfinishedForVictim = async (
   return open.flatMap((sos) => (sos.assignedVolunteer ? [String(sos.assignedVolunteer)] : []))
 }
 
-const setPriority = async (id: string, priority: Priority) => {
-  const updated = await SosRequest.findByIdAndUpdate(
+// `findByIdAndUpdate` hands back the document as it was before the change, which is where the audit
+// entry gets the old priority. Setting the priority it already has changes nothing and records nothing.
+const setPriority = async (admin: TokenPayload, id: string, priority: Priority) => {
+  const before = await SosRequest.findByIdAndUpdate(
     id,
     { $set: { priority } },
     { runValidators: true },
   )
-  if (!updated) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+  if (!before) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+
+  if (before.priority !== priority) {
+    await AuditService.record({
+      actor: admin,
+      action: AuditAction.SOS_PRIORITY_CHANGED,
+      targetType: AuditTargetType.SOS_REQUEST,
+      targetId: id,
+      summary: `Changed SOS priority from ${before.priority} to ${priority}`,
+      meta: { from: before.priority, to: priority },
+    })
+  }
   return getFullView(id)
 }
 
