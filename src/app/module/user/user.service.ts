@@ -335,7 +335,7 @@ const updateNotificationPreferences = async (id: string, changes: PreferencesCha
 
 const countActiveVolunteers = () => User.countDocuments({ role: Role.VOLUNTEER, isDeleted: false })
 
-// --- Dispatch (commit 15) ----------------------------------------------------------------------
+// --- Dispatch (commit 20) ----------------------------------------------------------------------
 
 const DISPATCH_DISTANCE_FIELD = 'distanceMetersFromRequest'
 

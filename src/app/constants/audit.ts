@@ -26,6 +26,7 @@ export const AuditAction = {
   SOS_DISPATCH_RUN: 'sos_dispatch_run',
   SOS_DISPATCH_PAUSED: 'sos_dispatch_paused',
   SOS_DISPATCH_RESUMED: 'sos_dispatch_resumed',
+  TASK_COMPLETED_BY_ADMIN: 'task_completed_by_admin',
 } as const
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction]

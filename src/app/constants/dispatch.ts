@@ -1,6 +1,6 @@
 import type { Priority } from './relief'
 
-// Who made an offer: the dispatch engine, or (commit 16 and 31) an admin or an NGO by hand.
+// Who made an offer: the dispatch engine, or (commit 21 and 35) an admin or an NGO by hand.
 export const OfferSource = {
   AUTO: 'auto',
   ADMIN: 'admin',
@@ -8,6 +8,15 @@ export const OfferSource = {
 } as const
 
 export type OfferSource = (typeof OfferSource)[keyof typeof OfferSource]
+
+// Whether finishing a task needs proof that the volunteer reached the victim (commit 24). `off` is the
+// kill switch; it only affects tasks created afterwards.
+export const ProofMode = {
+  OFF: 'off',
+  CODE_OR_PHOTO: 'code_or_photo',
+} as const
+
+export type ProofMode = (typeof ProofMode)[keyof typeof ProofMode]
 
 // The one document that holds the admin-editable settings (a singleton, found by this key).
 export const DISPATCH_SETTINGS_KEY = 'default'
@@ -36,7 +45,7 @@ export interface DispatchSettingsValues {
     skillMatch: number
     noShowPenalty: number
   }
-  // Stale cleanup (commit 18): hours without a sign of life before the victim is asked "Do you still
+  // Stale cleanup (commit 23): hours without a sign of life before the victim is asked "Do you still
   // need help?" (a pending request / one a volunteer holds), and before an unanswered medium or low
   // request is closed.
   staleCheckAfterHours: number
@@ -46,6 +55,9 @@ export interface DispatchSettingsValues {
   // it, and until one has arrived (the task is completed). The board and the dashboard measure against them.
   slaAssignMinutes: Record<Priority, number>
   slaArriveMinutes: Record<Priority, number>
+  // Proof of delivery (commit 24): a task created while this is `code_or_photo` can only be completed with
+  // the victim's arrival code or a photo (or by an admin). Tasks created earlier are unaffected.
+  proofMode: ProofMode
 }
 
 export const DEFAULT_DISPATCH_SETTINGS: DispatchSettingsValues = {
@@ -67,6 +79,7 @@ export const DEFAULT_DISPATCH_SETTINGS: DispatchSettingsValues = {
   staleCloseAfterHours: 24,
   slaAssignMinutes: { critical: 10, high: 30, medium: 90, low: 240 },
   slaArriveMinutes: { critical: 30, high: 60, medium: 180, low: 480 },
+  proofMode: ProofMode.CODE_OR_PHOTO,
 }
 
 // Escalation level at which a request that is still unanswered is raised one priority step.
@@ -130,6 +143,7 @@ export const DISPATCH_SETTINGS_LIMITS = {
   staleHours: range(1, 720),
   slaMinutes: range(1, 10_080),
   weight: range(0, 1),
+  proofModes: Object.values(ProofMode),
 } as const
 
 // A target counts as "at risk" once this much of it has gone.

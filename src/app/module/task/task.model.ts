@@ -1,9 +1,10 @@
 import { Schema, model } from 'mongoose'
 import { OfferSource } from '../../constants/dispatch'
-import { MAX_TASK_NOTES_LENGTH, TaskStatus } from '../../constants/task'
+import { MAX_TASK_NOTES_LENGTH, ProofKind, TaskStatus } from '../../constants/task'
 
 const STATUS_VALUES: TaskStatus[] = Object.values(TaskStatus)
 const OFFER_SOURCE_VALUES: OfferSource[] = Object.values(OfferSource)
+const PROOF_KIND_VALUES: ProofKind[] = Object.values(ProofKind)
 
 // One volunteer's involvement with one SOS request: they accepted it, declined it, or were offered
 // it. At most one task per (request, volunteer), so declining twice is a no-op, not a second row.
@@ -25,6 +26,23 @@ const taskSchema = new Schema(
     offeredAt: { type: Date },
     offerExpiresAt: { type: Date },
     offerSource: { type: String, enum: OFFER_SOURCE_VALUES },
+    // Proof of delivery (commit 24). Decided once, when the task is created, from the dispatch setting of
+    // that moment; a task from before then has none and is completed as it always was.
+    proofRequired: { type: Boolean, default: false },
+    // Wrong arrival codes so far. At the limit the code no longer works for this task.
+    proofAttempts: { type: Number, default: 0, min: 0 },
+    // How the task was shown to be finished. A photo is stored before the task is completed; a code or an
+    // admin's override is stored by the completing write itself. `mediaPublicId` is Cloudinary's handle
+    // for deleting the file and never leaves the server.
+    proof: {
+      kind: { type: String, enum: PROOF_KIND_VALUES },
+      at: { type: Date },
+      mediaUrl: { type: String },
+      mediaPublicId: { type: String },
+      // The admin who completed it, and why (only for `admin`).
+      by: { type: Schema.Types.ObjectId, ref: 'User' },
+      reason: { type: String, trim: true, maxlength: MAX_TASK_NOTES_LENGTH },
+    },
   },
   { timestamps: true, versionKey: false },
 )

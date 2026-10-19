@@ -6,6 +6,7 @@ import { sendResponse } from '../../utils/sendResponse'
 import { idParamSchema } from '../../utils/validation'
 import {
   listTasksQuerySchema,
+  overrideCompleteSchema,
   rateTaskSchema,
   respondSchema,
   taskStatusSchema,
@@ -59,6 +60,30 @@ const updateStatus = catchAsync(async (req, res) => {
   })
 })
 
+const addProofPhoto = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  // upload.single() puts the file on req.file (undefined when the field was missing).
+  const task = await TaskService.addProofPhoto(getAuthUser(req).id, id, req.file)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Proof photo uploaded successfully',
+    data: task,
+  })
+})
+
+const overrideComplete = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const payload = overrideCompleteSchema.parse(req.body)
+  const task = await TaskService.overrideComplete(getAuthUser(req), id, payload)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Task completed by an admin',
+    data: task,
+  })
+})
+
 const getRatingStatus = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const status = await TaskService.getRatingStatus(getAuthUser(req).id, id)
@@ -87,6 +112,8 @@ export const TaskController = {
   getTask,
   respond,
   updateStatus,
+  addProofPhoto,
+  overrideComplete,
   getRatingStatus,
   rateTask,
 }

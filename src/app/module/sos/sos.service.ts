@@ -382,7 +382,8 @@ const getSosById = async (viewer: TokenPayload, id: string) => {
   if (isOwner) {
     return { ...toFullView(sos), task: await TaskService.getVictimSummary(id, viewer.id) }
   }
-  if (isStaff) return toStaffView(sos)
+  // Staff also see who holds the request and how their task was shown to be finished.
+  if (isStaff) return { ...toStaffView(sos), task: await TaskService.getStaffSummary(id) }
   if (isAssigned) return toFullView(sos)
 
   if (viewer.role === Role.VOLUNTEER && sos.status === SosStatus.PENDING) {
@@ -1167,7 +1168,7 @@ const getTimeline = async (viewer: TokenPayload, id: string, query: TimelineQuer
   return SosEventService.listTimeline(id, query, isStaff)
 }
 
-// --- Stale requests (commit 18): the job in module/dispatch/stale.service drives these -----------
+// --- Stale requests (commit 23): the job in module/dispatch/stale.service drives these -----------
 
 const STILL_OPEN_STATUSES: SosStatus[] = [
   SosStatus.PENDING,
@@ -1321,7 +1322,7 @@ const autoCloseStale = async (ref: StaleRef, now: Date) => {
   })
 }
 
-// --- Dispatch board and metrics (commit 19) ---------------------------------------------------------
+// --- Dispatch board and metrics (commit 23) ---------------------------------------------------------
 
 export interface BoardRow {
   id: string

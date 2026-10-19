@@ -1,3 +1,5 @@
+import { SOS_MEDIA_FORMATS } from './sos'
+
 export const TaskStatus = {
   PENDING: 'pending',
   ACCEPTED: 'accepted',
@@ -5,7 +7,7 @@ export const TaskStatus = {
   ON_THE_WAY: 'on_the_way',
   COMPLETED: 'completed',
   CANCELLED: 'cancelled',
-  // An offer nobody answered in time (dispatch, commit 15).
+  // An offer nobody answered in time (dispatch, commit 20).
   EXPIRED: 'expired',
 } as const
 
@@ -67,3 +69,23 @@ export type RespondAction = (typeof RespondAction)[keyof typeof RespondAction]
 
 export const MIN_RATING = 1
 export const MAX_RATING = 5
+
+// Proof of delivery (commit 24): how a task was shown to be finished.
+export const ProofKind = {
+  CODE: 'code',
+  PHOTO: 'photo',
+  ADMIN: 'admin',
+} as const
+
+export type ProofKind = (typeof ProofKind)[keyof typeof ProofKind]
+
+// The victim's arrival code is this many digits, and a task accepts this many wrong tries before the code
+// is locked for it (a photo or an admin can still complete it).
+export const PROOF_CODE_LENGTH = 6
+export const MAX_PROOF_ATTEMPTS = 5
+
+// A proof photo is one image. Same size cap and Cloudinary content check as the SOS media; videos are out.
+export const PROOF_MEDIA_FOLDER = 'aidbridge/proof'
+export const PROOF_PHOTO_FORMATS: Record<string, string> = Object.fromEntries(
+  Object.entries(SOS_MEDIA_FORMATS).filter(([mimeType]) => mimeType.startsWith('image/')),
+)

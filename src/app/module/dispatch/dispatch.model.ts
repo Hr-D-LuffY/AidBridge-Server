@@ -1,12 +1,17 @@
 import { Schema, model } from 'mongoose'
-import { DEFAULT_DISPATCH_SETTINGS as D, DISPATCH_SETTINGS_KEY } from '../../constants/dispatch'
+import {
+  DEFAULT_DISPATCH_SETTINGS as D,
+  DISPATCH_SETTINGS_KEY,
+  ProofMode,
+} from '../../constants/dispatch'
 
+const PROOF_MODE_VALUES: ProofMode[] = Object.values(ProofMode)
 const minutes = (value: number) => ({ type: Number, default: value, min: 1 })
 const positive = (value: number) => ({ type: Number, default: value, min: 0 })
 
 // The dispatch engine's settings: one document, created the first time anyone asks for it. Every
 // default lives in constants/dispatch.ts; nothing here is a magic number. Bounds for editing are
-// validated by the Zod schema of the settings route (commit 16), not here.
+// validated by the Zod schema of the settings route (commit 21), not here.
 const dispatchSettingsSchema = new Schema(
   {
     key: { type: String, default: DISPATCH_SETTINGS_KEY, unique: true, required: true },
@@ -49,6 +54,7 @@ const dispatchSettingsSchema = new Schema(
       medium: minutes(D.slaArriveMinutes.medium),
       low: minutes(D.slaArriveMinutes.low),
     },
+    proofMode: { type: String, enum: PROOF_MODE_VALUES, default: D.proofMode },
   },
   { timestamps: true, versionKey: false },
 )

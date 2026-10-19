@@ -13,7 +13,7 @@ export type SosStatus = (typeof SosStatus)[keyof typeof SosStatus]
 export const SOS_TRANSITIONS: Record<SosStatus, readonly SosStatus[]> = {
   [SosStatus.PENDING]: [SosStatus.ASSIGNED, SosStatus.CLOSED],
   [SosStatus.ASSIGNED]: [SosStatus.ON_THE_WAY, SosStatus.PENDING, SosStatus.CLOSED],
-  // `on_the_way -> pending` is only an admin taking the request off its volunteer (commit 16).
+  // `on_the_way -> pending` is only an admin taking the request off its volunteer (commit 21).
   [SosStatus.ON_THE_WAY]: [SosStatus.RESCUED, SosStatus.PENDING, SosStatus.CLOSED],
   [SosStatus.RESCUED]: [SosStatus.CLOSED],
   [SosStatus.CLOSED]: [],
@@ -29,7 +29,7 @@ export const ResolveKind = {
   RESCUED_ELSEWHERE: 'rescued_elsewhere',
   NO_LONGER_NEEDED: 'no_longer_needed',
   OTHER: 'other',
-  // Never chosen by a person: the system closed a medium or low request nobody answered for (commit 18).
+  // Never chosen by a person: the system closed a medium or low request nobody answered for (commit 23).
   STALE: 'stale',
 } as const
 

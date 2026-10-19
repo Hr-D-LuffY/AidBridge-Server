@@ -12,6 +12,7 @@ import {
   METERS_PER_KM,
   MS_PER_MINUTE,
   OfferSource,
+  type ProofMode,
   SET_OFF_TIMEOUT_NOTE,
   SosEventType,
 } from '../../constants/dispatch'
@@ -87,13 +88,15 @@ interface SettingsDocument {
   setOffWithinMinutes: number
   criticalSetOffWithinMinutes: number
   weights?: Partial<DispatchSettingsValues['weights']> | null
-  // Added in commit 18: a settings document saved before then has none of the three.
+  // Added in commit 23: a settings document saved before then has none of the three.
   staleCheckAfterHours?: number
   staleCheckAssignedAfterHours?: number
   staleCloseAfterHours?: number
-  // Added in commit 19.
+  // Added in commit 23.
   slaAssignMinutes?: Partial<DispatchSettingsValues['slaAssignMinutes']> | null
   slaArriveMinutes?: Partial<DispatchSettingsValues['slaArriveMinutes']> | null
+  // Added in commit 24.
+  proofMode?: ProofMode
 }
 
 // Only the settings fields leave the document (not its id, key or timestamps).
@@ -118,6 +121,7 @@ const toSettingsValues = (doc: SettingsDocument): DispatchSettingsValues => ({
   staleCloseAfterHours: doc.staleCloseAfterHours ?? DEFAULT_DISPATCH_SETTINGS.staleCloseAfterHours,
   slaAssignMinutes: { ...DEFAULT_DISPATCH_SETTINGS.slaAssignMinutes, ...doc.slaAssignMinutes },
   slaArriveMinutes: { ...DEFAULT_DISPATCH_SETTINGS.slaArriveMinutes, ...doc.slaArriveMinutes },
+  proofMode: doc.proofMode ?? DEFAULT_DISPATCH_SETTINGS.proofMode,
 })
 
 const isDuplicateKey = (error: unknown) =>
@@ -500,7 +504,7 @@ const announceAll = async (sos: DueSos, progress: DispatchProgress, announce: An
   }
 }
 
-// --- Admin controls (commit 16) ------------------------------------------------------------------
+// --- Admin controls (commit 21) ------------------------------------------------------------------
 
 const NOT_FOUND_MESSAGE = 'SOS request not found'
 const SETTINGS_RACE_MESSAGE =

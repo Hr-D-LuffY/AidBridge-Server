@@ -186,14 +186,16 @@ export const rankCandidates = <T extends Candidate>(
 // --- Editing the settings ------------------------------------------------------------------------
 
 // A settings edit as dotted paths to the value they set: `{ 'waitMinutes.critical': 3, enabled: false }`.
-export type SettingsChange = Record<string, number | boolean>
+export type SettingsChange = Record<string, number | boolean | string>
 
 // One level of nesting is all the settings have (`waitMinutes`, `weights`). The paths come from the
 // validated body, never from the caller's own keys, so nothing but a known setting can appear here.
 export const flattenSettingsPayload = (payload: object): SettingsChange => {
   const flat: SettingsChange = {}
   const add = (path: string, value: unknown) => {
-    if (typeof value === 'number' || typeof value === 'boolean') flat[path] = value
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') {
+      flat[path] = value
+    }
   }
   for (const [key, value] of Object.entries(payload)) {
     if (typeof value === 'object' && value !== null) {

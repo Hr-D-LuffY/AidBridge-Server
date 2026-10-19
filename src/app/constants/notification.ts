@@ -44,6 +44,7 @@ export const NotificationType = {
   SOS_STILL_NEED_HELP: 'sos_still_need_help',
   SOS_CLOSED_STALE: 'sos_closed_stale',
   SOS_STALE_UNANSWERED: 'sos_stale_unanswered',
+  TASK_COMPLETED_BY_ADMIN: 'task_completed_by_admin',
 } as const
 
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType]
@@ -158,6 +159,13 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   // To admins and NGOs: a high or critical request is quiet. It is never closed automatically.
   [NotificationType.SOS_STALE_UNANSWERED]: {
     category: NotificationCategory.SAFETY,
+    emailable: false,
+    mandatory: true,
+  },
+  // To the volunteer: an admin completed their task without the arrival code or a photo. Mandatory, so the
+  // volunteer always learns that their task was closed by someone else.
+  [NotificationType.TASK_COMPLETED_BY_ADMIN]: {
+    category: NotificationCategory.TASKS,
     emailable: false,
     mandatory: true,
   },

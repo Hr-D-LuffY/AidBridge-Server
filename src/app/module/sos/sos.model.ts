@@ -87,7 +87,7 @@ const sosSchema = new Schema(
       escalatedAt: { type: Date },
       // The engine raised the priority one step because the request stayed unanswered.
       priorityBumped: { type: Boolean, default: false },
-      // An admin is handling it by hand: no automatic offers (the controls arrive in commit 16).
+      // An admin is handling it by hand: no automatic offers (the controls arrive in commit 21).
       paused: { type: Boolean, default: false },
     },
   },

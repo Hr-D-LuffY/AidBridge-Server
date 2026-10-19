@@ -4,6 +4,7 @@ import {
   BOARD_MAX_LIMIT,
   DISPATCH_SETTINGS_LIMITS as LIMITS,
   MAX_DISPATCH_NOTE_LENGTH,
+  ProofMode,
 } from '../../constants/dispatch'
 import { paginationQueryShape } from '../../utils/pagination'
 import { atLeastOneField, objectIdSchema, updateBodySchema } from '../../utils/validation'
@@ -106,6 +107,11 @@ export const updateSettingsSchema = updateBodySchema(
       medium: minutes(LIMITS.slaMinutes, 'Medium arrival target').optional(),
       low: minutes(LIMITS.slaMinutes, 'Low arrival target').optional(),
     }).optional(),
+    proofMode: z
+      .enum(ProofMode, {
+        error: `Proof mode must be one of: ${Object.values(ProofMode).join(', ')}`,
+      })
+      .optional(),
     weights: partialBlock({
       distance: weight('Distance weight').optional(),
       reliability: weight('Reliability weight').optional(),

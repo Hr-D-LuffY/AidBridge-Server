@@ -1,18 +1,33 @@
 import httpStatus from 'http-status'
 import mongoose, { type ClientSession, type QueryFilter, type Types } from 'mongoose'
-import { type OfferSource, SosEventType } from '../../constants/dispatch'
+import { AuditAction, AuditTargetType } from '../../constants/audit'
+import {
+  DEFAULT_DISPATCH_SETTINGS,
+  DISPATCH_SETTINGS_KEY,
+  type OfferSource,
+  ProofMode,
+  SosEventType,
+} from '../../constants/dispatch'
+import { MediaType } from '../../constants/sos'
 import {
   MAX_ACTIVE_TASKS_PER_VOLUNTEER,
+  MAX_PROOF_ATTEMPTS,
   MAX_TASK_NOTES_LENGTH,
   OFFER_TAKEN_NOTE,
+  PROOF_MEDIA_FOLDER,
+  PROOF_PHOTO_FORMATS,
+  ProofKind,
   RespondAction,
   TASK_ACTIVE_STATUSES,
   TASK_OPEN_STATUSES,
   TASK_TRANSITIONS,
+  type TaskProgressStatus,
   TaskStatus,
 } from '../../constants/task'
 import { NotificationType } from '../../constants/notification'
 import { AppError } from '../../errorHelpers/AppError'
+import { assertMediaStorageConfigured, deleteMedia, uploadMediaBuffer } from '../../lib/cloudinary'
+import { arrivalCode, codeMatches } from '../../lib/proof'
 import { runInTransaction } from '../../lib/transaction'
 import {
   MS_PER_MINUTE,
@@ -21,14 +36,18 @@ import {
 } from '../../constants/analytics'
 import { Collection } from '../../constants/collections'
 import { type DateRange, inRange } from '../../utils/dateRange'
+import type { TokenPayload } from '../../utils/jwt'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { assertTransition } from '../../utils/transitions'
+import { AuditService } from '../audit/audit.service'
+import { DispatchSettings } from '../dispatch/dispatch.model'
 import { type SosRecord, SosService, SOS_PEOPLE_POPULATE } from '../sos/sos.service'
 import { NotificationService } from '../notification/notification.service'
 import { SosEventService } from '../sos-event/sos-event.service'
 import { UserService } from '../user/user.service'
 import type {
   ListTasksQuery,
+  OverrideCompletePayload,
   RateTaskPayload,
   RespondPayload,
   TaskStatusPayload,
@@ -39,6 +58,11 @@ const TASK_NOT_FOUND_MESSAGE = 'Task not found'
 const RACE_MESSAGE = 'This task changed while you were updating it. Please try again'
 const OFFER_EXPIRED_MESSAGE = 'This offer has expired'
 const CANCELLED_NOTE_PREFIX = 'SOS resolved by the victim before completion. Reason: '
+const PROOF_REQUIRED_MESSAGE =
+  'Proof of delivery is required. Enter the arrival code the victim shows you, or upload a photo'
+const PROOF_LOCKED_MESSAGE =
+  'Too many wrong codes for this task. Upload a photo instead, or ask an admin to complete it'
+const PROOF_UPLOAD_FAILED_MESSAGE = 'Uploading the photo failed. Please try again'
 
 // The volunteer sees the victim's phone and exact position only once they have taken the request.
 const CONTACT_VISIBLE_STATUSES: readonly TaskStatus[] = [
@@ -47,7 +71,22 @@ const CONTACT_VISIBLE_STATUSES: readonly TaskStatus[] = [
   TaskStatus.COMPLETED,
 ]
 
-interface TaskFields {
+interface ProofFields {
+  kind?: ProofKind | null
+  at?: Date | null
+  mediaUrl?: string | null
+  mediaPublicId?: string | null
+  by?: Types.ObjectId | null
+  reason?: string | null
+}
+
+interface ProofState {
+  proofRequired?: boolean | null
+  proofAttempts?: number | null
+  proof?: ProofFields | null
+}
+
+interface TaskFields extends ProofState {
   _id: Types.ObjectId
   status: TaskStatus
   acceptedAt?: Date | null
@@ -62,6 +101,35 @@ interface TaskFields {
   sosRequest: SosRecord
 }
 
+// Proof of delivery as the volunteer sees it. `attemptsLeft` is how many wrong arrival codes they may still
+// enter (0: the code is locked for this task, a photo is the way); null when the task needs no proof.
+const toProofView = (task: ProofState) => ({
+  required: task.proofRequired ?? false,
+  attemptsLeft: task.proofRequired
+    ? Math.max(0, MAX_PROOF_ATTEMPTS - (task.proofAttempts ?? 0))
+    : null,
+  submitted: task.proof?.kind
+    ? {
+        kind: task.proof.kind,
+        at: task.proof.at ?? null,
+        mediaUrl: task.proof.kind === ProofKind.PHOTO ? (task.proof.mediaUrl ?? null) : null,
+      }
+    : null,
+})
+
+// What an admin or NGO sees: the same, plus who overrode and why.
+const toStaffProofView = (task: ProofState) => {
+  const view = toProofView(task)
+  return {
+    ...view,
+    submitted: view.submitted && {
+      ...view.submitted,
+      overriddenBy: task.proof?.by ? String(task.proof.by) : null,
+      overrideReason: task.proof?.reason ?? null,
+    },
+  }
+}
+
 const toTaskView = (task: TaskFields) => ({
   id: String(task._id),
   status: task.status,
@@ -69,6 +137,7 @@ const toTaskView = (task: TaskFields) => ({
   completedAt: task.completedAt ?? null,
   notes: task.notes ?? null,
   isRated: task.isRated,
+  proof: toProofView(task),
   // Present when the task started as an offer. A pending task with an offer is waiting for an answer
   // until `expiresAt`; after that it is `expired`.
   offer: task.offerExpiresAt
@@ -171,15 +240,29 @@ interface TaskOwners {
   victim: string
 }
 
+// Whether a task created now has to be finished with proof of delivery. Read from the setting at that
+// moment and stored on the task, so switching the setting later never changes a task already under way.
+const isProofRequiredNow = async () => {
+  const settings = await DispatchSettings.findOne({ key: DISPATCH_SETTINGS_KEY })
+    .select('proofMode')
+    .lean()
+  return (settings?.proofMode ?? DEFAULT_DISPATCH_SETTINGS.proofMode) !== ProofMode.OFF
+}
+
 // Creates the volunteer's task as `accepted`, or turns an offered (`pending`) one into it. An offer
 // that ran out (`expired`) can still be taken: the volunteer is choosing it themselves from their
 // nearby list, which an expired offer never hides. The filter allows nothing else, so a declined task
-// can't be silently revived (it would collide on the unique index instead).
+// can't be silently revived (it would collide on the unique index instead). A task made here from
+// scratch decides on proof of delivery; one that began as an offer decided when it was offered.
 const createAccepted = async (session: ClientSession, owners: TaskOwners) => {
   const { sosRequest, volunteer, victim } = owners
+  const proofRequired = await isProofRequiredNow()
   const task = await Task.findOneAndUpdate(
     { sosRequest, volunteer, status: { $in: [TaskStatus.PENDING, TaskStatus.EXPIRED] } },
-    { $set: { status: TaskStatus.ACCEPTED, acceptedAt: new Date(), victim } },
+    {
+      $set: { status: TaskStatus.ACCEPTED, acceptedAt: new Date(), victim },
+      $setOnInsert: { proofRequired },
+    },
     {
       upsert: true,
       returnDocument: 'after',
@@ -246,7 +329,7 @@ const cancelOpenTasks = async (
   return open.map((task) => String(task.volunteer))
 }
 
-// --- Offers (dispatch, commit 15) ---------------------------------------------------------------
+// --- Offers (dispatch, commit 20) ---------------------------------------------------------------
 // An offer is a `pending` task with an expiry. The unique (request, volunteer) index means a volunteer
 // is offered a request at most once, whatever happened to the earlier offer.
 
@@ -266,6 +349,7 @@ interface OfferInput {
 const createOffers = async (input: OfferInput) => {
   const { sosRequest, victim, volunteerIds, offeredAt, expiresAt, source, reopenExpired } = input
   const created: string[] = []
+  const proofRequired = await isProofRequiredNow()
   for (const volunteer of volunteerIds) {
     const result = await Task.updateOne(
       { sosRequest, volunteer },
@@ -276,6 +360,7 @@ const createOffers = async (input: OfferInput) => {
           offeredAt,
           offerExpiresAt: expiresAt,
           offerSource: source,
+          proofRequired,
         },
       },
       { upsert: true },
@@ -565,46 +650,225 @@ const respond = async (volunteerId: string, taskId: string, payload: RespondPayl
   return getView(taskId)
 }
 
-// accepted -> on_the_way -> completed. The request moves in the same transaction, and each write is
-// conditional on the state it expects, so the task and the request can't drift apart.
-const updateStatus = async (volunteerId: string, taskId: string, payload: TaskStatusPayload) => {
-  const { status } = payload
-  const task = await loadOwnTask(taskId, volunteerId)
-  assertTransition(TASK_TRANSITIONS, task.status, status, 'task')
+interface MovableTask {
+  _id: Types.ObjectId
+  sosRequest: Types.ObjectId
+  volunteer: Types.ObjectId
+  status: TaskStatus
+}
 
-  await runInTransaction(async (session) => {
+// The task and its request move one step together, in one transaction. The write is conditional on the
+// state it expects, so the task and the request can't drift apart. `extra` is set in the same write.
+const moveTask = (task: MovableTask, status: TaskProgressStatus, extra: Record<string, unknown>) =>
+  runInTransaction(async (session) => {
     const moved = await Task.findOneAndUpdate(
-      { _id: taskId, volunteer: volunteerId, status: task.status },
+      { _id: task._id, volunteer: task.volunteer, status: task.status },
       {
         $set: {
           status,
           ...(status === TaskStatus.COMPLETED && { completedAt: new Date() }),
+          ...extra,
         },
       },
-      { session },
+      { session, runValidators: true },
     )
     if (!moved) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
-    await SosService.advanceForVolunteer(session, String(task.sosRequest), volunteerId, status)
+    await SosService.advanceForVolunteer(
+      session,
+      String(task.sosRequest),
+      String(task.volunteer),
+      status,
+    )
   })
 
-  // After the commit: the victim hears about each step. Never fails the request.
+interface ProgressDetails {
+  // How a completion was shown (goes on the timeline).
+  proof?: ProofKind | null
+  // Set when an admin, not the volunteer, made the step.
+  adminId?: string
+}
+
+interface AnnouncedTask {
+  sosRequest: Types.ObjectId
+  victim: Types.ObjectId
+  volunteer: Types.ObjectId
+  proofRequired?: boolean | null
+}
+
+// After the commit: the timeline records the step and the victim hears about it. Never fails the request.
+const announceProgress = async (
+  task: AnnouncedTask,
+  status: TaskProgressStatus,
+  details: ProgressDetails = {},
+) => {
+  const volunteerId = String(task.volunteer)
   const volunteerName =
     (await UserService.getDisplayName(volunteerId).catch(() => null)) ?? 'Your volunteer'
   const finished = status === TaskStatus.COMPLETED
   await SosEventService.record({
     sos: String(task.sosRequest),
     type: finished ? SosEventType.COMPLETED : SosEventType.ON_THE_WAY,
-    actorId: volunteerId,
+    actorId: details.adminId ?? volunteerId,
     subjectId: volunteerId,
+    ...(finished && details.proof && { meta: { proof: details.proof } }),
   })
+  // The arrival code itself is never put in a notification (it can be read from lock screens and email);
+  // the victim is only told where to find it.
+  const onTheWay = task.proofRequired
+    ? `${volunteerName} is on the way to you. When they arrive they will ask for the arrival code shown on your request in the app.`
+    : `${volunteerName} is on the way to you.`
   await NotificationService.notifyUsers({
     userIds: [String(task.victim)],
     type: finished ? NotificationType.SOS_RESCUED : NotificationType.SOS_ON_THE_WAY,
     title: finished ? 'Your request was marked as rescued' : 'Your volunteer is on the way',
     message: finished
-      ? `${volunteerName} marked your SOS request as rescued. You can now rate your volunteer.`
-      : `${volunteerName} is on the way to you.`,
+      ? `${details.adminId ? 'An admin' : volunteerName} marked your SOS request as rescued. You can now rate your volunteer.`
+      : onTheWay,
     sosRequestId: String(task.sosRequest),
+  })
+}
+
+type OwnTask = Awaited<ReturnType<typeof loadOwnTask>>
+
+// What finishing this task has to be backed with: null when it needs no proof, else the kind that was shown.
+// A photo already stored counts and the code is not looked at. A code costs one try before it is compared,
+// taken with a conditional update, so guesses sent at the very same moment still get five tries in all.
+const checkProof = async (task: OwnTask, code: string | undefined): Promise<ProofKind | null> => {
+  if (!task.proofRequired) return null
+  if (task.proof?.kind === ProofKind.PHOTO) return ProofKind.PHOTO
+  if (!code) throw new AppError(httpStatus.BAD_REQUEST, PROOF_REQUIRED_MESSAGE)
+
+  const reserved = await Task.findOneAndUpdate(
+    { _id: task._id, proofAttempts: { $not: { $gte: MAX_PROOF_ATTEMPTS } } },
+    { $inc: { proofAttempts: 1 } },
+    { returnDocument: 'after' },
+  )
+    .select('proofAttempts')
+    .lean()
+  if (!reserved) throw new AppError(httpStatus.CONFLICT, PROOF_LOCKED_MESSAGE)
+
+  if (!codeMatches(arrivalCode(String(task.sosRequest), String(task._id)), code)) {
+    const left = Math.max(0, MAX_PROOF_ATTEMPTS - (reserved.proofAttempts ?? 0))
+    throw new AppError(
+      httpStatus.BAD_REQUEST,
+      left > 0
+        ? `That code is not right. ${left} ${left === 1 ? 'try' : 'tries'} left`
+        : 'That code is not right, and the code is now locked for this task. Upload a photo instead, or ask an admin to complete it',
+    )
+  }
+  return ProofKind.CODE
+}
+
+// accepted -> on_the_way -> completed. Completing a task that needs proof takes the victim's arrival code
+// or a photo uploaded earlier (`addProofPhoto`); the proof is stored with the completion itself.
+const updateStatus = async (volunteerId: string, taskId: string, payload: TaskStatusPayload) => {
+  const { status, proof } = payload
+  const task = await loadOwnTask(taskId, volunteerId)
+  assertTransition(TASK_TRANSITIONS, task.status, status, 'task')
+
+  const finished = status === TaskStatus.COMPLETED
+  const proofKind = finished ? await checkProof(task, proof?.code) : null
+  // A photo is already on the task; a code is written now.
+  const stored = proofKind === ProofKind.CODE ? { proof: { kind: proofKind, at: new Date() } } : {}
+  await moveTask(task, status, stored)
+  await announceProgress(task, status, { proof: proofKind })
+  return getView(taskId)
+}
+
+// The volunteer's photo of arrival, replacing an earlier one. It does not complete the task: it makes the
+// completion possible without the code, so the volunteer still presses "completed".
+const addProofPhoto = async (
+  volunteerId: string,
+  taskId: string,
+  file: Express.Multer.File | undefined,
+) => {
+  if (!file) throw new AppError(httpStatus.BAD_REQUEST, 'Attach one image in the "media" field')
+  assertMediaStorageConfigured()
+
+  const task = await loadOwnTask(taskId, volunteerId)
+  if (task.status !== TaskStatus.ON_THE_WAY) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      `A proof photo can only be added while you are on the way, and this task is ${task.status}`,
+    )
+  }
+  if (!task.proofRequired) {
+    throw new AppError(httpStatus.CONFLICT, 'This task does not need proof of delivery')
+  }
+
+  const uploaded = await uploadMediaBuffer(
+    file.buffer,
+    PROOF_MEDIA_FOLDER,
+    Object.values(PROOF_PHOTO_FORMATS),
+  ).catch((error: unknown) => {
+    console.error('Proof photo upload failed:', error)
+    throw new AppError(httpStatus.BAD_GATEWAY, PROOF_UPLOAD_FAILED_MESSAGE)
+  })
+
+  // The write hands back the task as it was, which is where the photo being replaced is found.
+  const before = await Task.findOneAndUpdate(
+    { _id: taskId, volunteer: volunteerId, status: TaskStatus.ON_THE_WAY, proofRequired: true },
+    {
+      $set: {
+        proof: {
+          kind: ProofKind.PHOTO,
+          at: new Date(),
+          mediaUrl: uploaded.url,
+          mediaPublicId: uploaded.publicId,
+        },
+      },
+    },
+    { runValidators: true },
+  )
+    .select('proof')
+    .lean()
+  if (!before) {
+    await deleteMedia(uploaded)
+    throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+  }
+
+  // Only once the task no longer points at the old file: a failed delete leaves an orphan, not a broken link.
+  if (before.proof?.mediaPublicId) {
+    await deleteMedia({ publicId: before.proof.mediaPublicId, resourceType: MediaType.IMAGE })
+  }
+  return getView(taskId)
+}
+
+// An admin completes a task whose volunteer is on the way, with no code or photo: the victim has no phone,
+// or the app failed at the door. The reason stays on the task; the audit log only says it happened.
+const overrideComplete = async (
+  admin: TokenPayload,
+  taskId: string,
+  payload: OverrideCompletePayload,
+) => {
+  const task = await Task.findById(taskId).lean()
+  if (!task) throw new AppError(httpStatus.NOT_FOUND, TASK_NOT_FOUND_MESSAGE)
+  if (task.status !== TaskStatus.ON_THE_WAY) {
+    throw new AppError(
+      httpStatus.CONFLICT,
+      `This task is ${task.status}. An admin can only complete a task whose volunteer is on the way`,
+    )
+  }
+
+  await moveTask(task, TaskStatus.COMPLETED, {
+    proof: { kind: ProofKind.ADMIN, at: new Date(), by: admin.id, reason: payload.reason },
+  })
+  await announceProgress(task, TaskStatus.COMPLETED, { proof: ProofKind.ADMIN, adminId: admin.id })
+  await NotificationService.notifyUsers({
+    userIds: [String(task.volunteer)],
+    type: NotificationType.TASK_COMPLETED_BY_ADMIN,
+    title: 'An admin completed your task',
+    message: 'An admin marked one of your tasks as completed.',
+    sosRequestId: String(task.sosRequest),
+  })
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.TASK_COMPLETED_BY_ADMIN,
+    targetType: AuditTargetType.SOS_REQUEST,
+    targetId: String(task.sosRequest),
+    // The reason may hold names or numbers, so it stays on the task and never goes in the audit log.
+    summary: 'Completed a task without an arrival code or photo',
+    meta: { taskId, volunteerId: String(task.volunteer) },
   })
   return getView(taskId)
 }
@@ -625,6 +889,35 @@ const getVictimSummary = async (sosId: string, victimId: string) => {
     status: task.status,
     isRated: task.isRated,
     canRate: task.status === TaskStatus.COMPLETED && !task.isRated,
+    // The victim shows this to the volunteer on arrival. It exists only while the volunteer is on the way
+    // and the task needs proof, and nobody but the victim is ever sent it.
+    arrivalCode:
+      task.status === TaskStatus.ON_THE_WAY && task.proofRequired
+        ? arrivalCode(String(task.sosRequest), String(task._id))
+        : null,
+  }
+}
+
+// The volunteer who is working (or worked) a request, as an admin or NGO sees them, with how the task was
+// shown to be finished. `null` while nobody holds it.
+const getStaffSummary = async (sosId: string) => {
+  const task = await Task.findOne({
+    sosRequest: sosId,
+    status: { $in: [...TASK_ACTIVE_STATUSES, TaskStatus.COMPLETED] },
+  })
+    .sort({ createdAt: -1 })
+    .lean()
+  if (!task) return null
+  return {
+    id: String(task._id),
+    status: task.status,
+    volunteer: {
+      id: String(task.volunteer),
+      name: (await UserService.getDisplayName(String(task.volunteer)).catch(() => null)) ?? null,
+    },
+    acceptedAt: task.acceptedAt ?? null,
+    completedAt: task.completedAt ?? null,
+    proof: toStaffProofView(task),
   }
 }
 
@@ -754,8 +1047,11 @@ export const TaskService = {
   listMyTasks,
   respond,
   updateStatus,
+  addProofPhoto,
+  overrideComplete,
   getRatingStatus,
   getVictimSummary,
+  getStaffSummary,
   rateTask,
   getView,
   getStatusFor,
