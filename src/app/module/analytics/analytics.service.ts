@@ -12,9 +12,11 @@ import { CampService } from '../camp/camp.service'
 import { DispatchService } from '../dispatch/dispatch.service'
 import { DistributionService } from '../distribution/distribution.service'
 import { IncidentService } from '../incident/incident.service'
+import { HeatmapService } from '../sos/heatmap.service'
 import { SosService } from '../sos/sos.service'
 import { TaskService } from '../task/task.service'
 import { UserService } from '../user/user.service'
+import type { HeatmapQuery } from './analytics.interface'
 
 interface CountRow<T extends string> {
   _id: T
@@ -97,4 +99,7 @@ const getLiveMap = async () => {
 
 const getAdminSummary = () => IncidentService.getSummary()
 
-export const AnalyticsService = { getDashboard, getReport, getLiveMap, getAdminSummary }
+// Where requests are, as counts per square of the map (§12k).
+const getHeatmap = (query: HeatmapQuery) => HeatmapService.getHeatmap(query)
+
+export const AnalyticsService = { getDashboard, getReport, getLiveMap, getAdminSummary, getHeatmap }

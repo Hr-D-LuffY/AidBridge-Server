@@ -10,5 +10,6 @@ router.get('/reports', auth(Role.ADMIN), AnalyticsController.getReport)
 router.get('/admin-summary', auth(Role.ADMIN), AnalyticsController.getAdminSummary)
 // NGOs coordinate camps and relief, so they see the map too.
 router.get('/live-map', auth(Role.ADMIN, Role.NGO), AnalyticsController.getLiveMap)
+router.get('/heatmap', auth(Role.ADMIN, Role.NGO), AnalyticsController.getHeatmap)
 
 export const AnalyticsRoutes = router

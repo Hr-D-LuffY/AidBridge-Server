@@ -10,6 +10,23 @@ export const TOP_DISTRIBUTED_ITEMS_LIMIT = 20
 export const LIVE_MAP_MAX_REQUESTS = 500
 export const LIVE_MAP_MAX_CAMPS = 500
 
+// The incident heatmap (commit 26): a grid of counts, never single requests. `cell` is the side of a square in
+// degrees (0.01 is about 1 km). Positions are rounded to the same ~1 km "approximate" grid the limited
+// request views use before they are counted, so a small cell never shows more than that view does.
+export const HeatmapStatus = {
+  OPEN: 'open',
+  UNSERVED: 'unserved',
+  ALL: 'all',
+} as const
+
+export type HeatmapStatus = (typeof HeatmapStatus)[keyof typeof HeatmapStatus]
+
+export const HEATMAP_DEFAULT_CELL = 0.01
+export const HEATMAP_MIN_CELL = 0.005
+export const HEATMAP_MAX_CELL = 1
+// Densest cells first; the response says when more existed.
+export const HEATMAP_MAX_CELLS = 2000
+
 export const MS_PER_MINUTE = 60_000
 export const RESPONSE_TIME_DECIMALS = 1
 

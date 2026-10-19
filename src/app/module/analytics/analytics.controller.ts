@@ -1,7 +1,7 @@
 import httpStatus from 'http-status'
 import { catchAsync } from '../../utils/catchAsync'
 import { sendResponse } from '../../utils/sendResponse'
-import { analyticsQuerySchema } from './analytics.interface'
+import { analyticsQuerySchema, heatmapQuerySchema } from './analytics.interface'
 import { AnalyticsService } from './analytics.service'
 
 const getDashboard = catchAsync(async (req, res) => {
@@ -28,6 +28,13 @@ const getLiveMap = catchAsync(async (_req, res) => {
   sendResponse(res, { statusCode: httpStatus.OK, message: 'Live map retrieved successfully', data })
 })
 
+const getHeatmap = catchAsync(async (req, res) => {
+  const query = heatmapQuerySchema.parse(req.query)
+  const data = await AnalyticsService.getHeatmap(query)
+
+  sendResponse(res, { statusCode: httpStatus.OK, message: 'Heatmap retrieved successfully', data })
+})
+
 const getAdminSummary = catchAsync(async (_req, res) => {
   const data = await AnalyticsService.getAdminSummary()
 
@@ -38,4 +45,10 @@ const getAdminSummary = catchAsync(async (_req, res) => {
   })
 })
 
-export const AnalyticsController = { getDashboard, getReport, getLiveMap, getAdminSummary }
+export const AnalyticsController = {
+  getDashboard,
+  getReport,
+  getLiveMap,
+  getHeatmap,
+  getAdminSummary,
+}
