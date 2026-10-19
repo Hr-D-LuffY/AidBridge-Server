@@ -4,6 +4,7 @@ import {
   MS_PER_MINUTE,
   NO_SHOW_PENALTY_CAP,
   PRIORITY_BUMP_LEVEL,
+  WEIGHT_SUM_TOLERANCE,
 } from '../../constants/dispatch'
 import { PRIORITY_ORDER, Priority } from '../../constants/relief'
 import { MAX_ACTIVE_TASKS_PER_VOLUNTEER, MAX_RATING } from '../../constants/task'
@@ -168,3 +169,71 @@ export const rankCandidates = <T extends Candidate>(
         a.candidate.id.localeCompare(b.candidate.id),
     )
     .map((entry) => entry.candidate)
+
+// --- Editing the settings ------------------------------------------------------------------------
+
+// A settings edit as dotted paths to the value they set: `{ 'waitMinutes.critical': 3, enabled: false }`.
+export type SettingsChange = Record<string, number | boolean>
+
+// One level of nesting is all the settings have (`waitMinutes`, `weights`). The paths come from the
+// validated body, never from the caller's own keys, so nothing but a known setting can appear here.
+export const flattenSettingsPayload = (payload: object): SettingsChange => {
+  const flat: SettingsChange = {}
+  const add = (path: string, value: unknown) => {
+    if (typeof value === 'number' || typeof value === 'boolean') flat[path] = value
+  }
+  for (const [key, value] of Object.entries(payload)) {
+    if (typeof value === 'object' && value !== null) {
+      for (const [inner, innerValue] of Object.entries(value)) add(`${key}.${inner}`, innerValue)
+    } else {
+      add(key, value)
+    }
+  }
+  return flat
+}
+
+const readPath = (values: object, path: string) =>
+  path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown>)?.[key], values)
+
+// Only the entries that would really change something.
+export const onlyChanged = (current: DispatchSettingsValues, change: SettingsChange) =>
+  Object.fromEntries(
+    Object.entries(change).filter(([path, value]) => readPath(current, path) !== value),
+  )
+
+// One line per change for the audit entry: `waitMinutes.critical: 5 → 3`.
+export const describeChanges = (current: DispatchSettingsValues, change: SettingsChange) =>
+  Object.entries(change).map(
+    ([path, value]) => `${path}: ${String(readPath(current, path))} → ${String(value)}`,
+  )
+
+export const applySettingsChange = (
+  current: DispatchSettingsValues,
+  change: SettingsChange,
+): DispatchSettingsValues => {
+  const next = structuredClone(current)
+  for (const [path, value] of Object.entries(change)) {
+    const keys = path.split('.')
+    const last = keys.pop()
+    const holder = keys.reduce<Record<string, unknown>>(
+      (node, key) => node[key] as Record<string, unknown>,
+      next as unknown as Record<string, unknown>,
+    )
+    if (last) holder[last] = value
+  }
+  return next
+}
+
+// Rules that involve more than one setting, so a single-field bound check cannot catch them. An empty
+// list means the settings are fine.
+export const validateSettings = (values: DispatchSettingsValues): string[] => {
+  const problems: string[] = []
+  if (values.startRadiusKm > values.maxRadiusKm) {
+    problems.push('The start radius cannot be larger than the maximum radius')
+  }
+  const sum = Object.values(values.weights).reduce((total, weight) => total + weight, 0)
+  if (Math.abs(sum - 1) > WEIGHT_SUM_TOLERANCE) {
+    problems.push(`The score weights must add up to 1 (they add up to ${sum.toFixed(3)})`)
+  }
+  return problems
+}

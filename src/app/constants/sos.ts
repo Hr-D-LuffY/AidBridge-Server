@@ -13,7 +13,8 @@ export type SosStatus = (typeof SosStatus)[keyof typeof SosStatus]
 export const SOS_TRANSITIONS: Record<SosStatus, readonly SosStatus[]> = {
   [SosStatus.PENDING]: [SosStatus.ASSIGNED, SosStatus.CLOSED],
   [SosStatus.ASSIGNED]: [SosStatus.ON_THE_WAY, SosStatus.PENDING, SosStatus.CLOSED],
-  [SosStatus.ON_THE_WAY]: [SosStatus.RESCUED, SosStatus.CLOSED],
+  // `on_the_way -> pending` is only an admin taking the request off its volunteer (commit 16).
+  [SosStatus.ON_THE_WAY]: [SosStatus.RESCUED, SosStatus.PENDING, SosStatus.CLOSED],
   [SosStatus.RESCUED]: [SosStatus.CLOSED],
   [SosStatus.CLOSED]: [],
 }

@@ -625,13 +625,16 @@ interface AcceptanceInput {
   volunteerName?: string
   // Volunteers whose open offers were withdrawn because this one took the request.
   withdrawnVolunteerIds: string[]
+  // Set when an admin gave the request to the volunteer, instead of the volunteer taking it.
+  assignedByAdminId?: string
 }
 
 // After a volunteer's claim has committed: the victim is told who is coming, the volunteers whose offers
 // were withdrawn are told it is taken, and the timeline records both. Shared by the two ways of
 // accepting (`PUT /sos/:id/accept` and answering an offer with `PUT /tasks/:id/respond`).
 const announceAcceptance = async (input: AcceptanceInput) => {
-  const { sosId, victimId, volunteerId, volunteerName, withdrawnVolunteerIds } = input
+  const { sosId, victimId, volunteerId, volunteerName, withdrawnVolunteerIds, assignedByAdminId } =
+    input
   await NotificationService.notifyUsers({
     userIds: [victimId],
     type: NotificationType.SOS_ASSIGNED,
@@ -647,7 +650,13 @@ const announceAcceptance = async (input: AcceptanceInput) => {
     sosRequestId: sosId,
   })
   await SosEventService.record(
-    { sos: sosId, type: SosEventType.ACCEPTED, actorId: volunteerId, subjectId: volunteerId },
+    {
+      sos: sosId,
+      type: SosEventType.ACCEPTED,
+      actorId: assignedByAdminId ?? volunteerId,
+      subjectId: volunteerId,
+      ...(assignedByAdminId && { meta: { direct: true } }),
+    },
     ...(withdrawnVolunteerIds.length > 0
       ? [
           {
@@ -858,12 +867,18 @@ const scheduleUnscheduled = async (
 
 // Takes this request's turn: moves `nextActionAt` from the value that was read to a lease in the
 // future. Of two server instances reading the same due request, only one matches, so only one acts.
-const claimDispatchTurn = async (id: string, expected: Date, leaseUntil: Date) => {
+// An admin running a step by hand (`ignorePaused`) may do so on a paused request.
+const claimDispatchTurn = async (
+  id: string,
+  expected: Date,
+  leaseUntil: Date,
+  ignorePaused = false,
+) => {
   const claimed = await SosRequest.findOneAndUpdate(
     {
       _id: id,
       status: SosStatus.PENDING,
-      'dispatch.paused': { $ne: true },
+      ...(!ignorePaused && { 'dispatch.paused': { $ne: true } }),
       'dispatch.nextActionAt': expected,
     },
     { $set: { 'dispatch.nextActionAt': leaseUntil } },
@@ -897,6 +912,97 @@ const saveDispatchState = async (id: string, patch: DispatchPatch) => {
     { $set: set },
   )
   return saved !== null
+}
+
+// One request as the dispatch engine needs it, in any status (an admin acts on requests that are not
+// due). Null when there is no such request.
+const getDispatchSubject = async (id: string) => {
+  const sos = await SosRequest.findById(id)
+    .select(
+      'victim priority status needs requiredSkills location createdAt assignedVolunteer dispatch',
+    )
+    .lean()
+  if (!sos) return null
+  return {
+    id: String(sos._id),
+    victimId: String(sos.victim),
+    status: sos.status,
+    priority: sos.priority,
+    needs: sos.needs,
+    requiredSkills: sos.requiredSkills ?? [],
+    // Validated on write, so a [lng, lat] pair.
+    coordinates: sos.location.coordinates as Coordinates,
+    createdAt: sos.createdAt,
+    assignedVolunteerId: sos.assignedVolunteer ? String(sos.assignedVolunteer) : null,
+    dispatch: {
+      level: sos.dispatch?.level ?? 0,
+      nextActionAt: sos.dispatch?.nextActionAt ?? null,
+      roundOpen: sos.dispatch?.roundOpen ?? false,
+      unserved: sos.dispatch?.unserved ?? false,
+      priorityBumped: sos.dispatch?.priorityBumped ?? false,
+      paused: sos.dispatch?.paused ?? false,
+    },
+  }
+}
+
+// An admin takes the request off its volunteer (assigned or already on the way): it goes back to pending
+// and dispatch starts over. Runs in the caller's transaction with the task being cancelled.
+const unassignToPending = async (
+  session: ClientSession,
+  id: string,
+  volunteerId: string,
+  pause: boolean,
+) => {
+  const released = await SosRequest.findOneAndUpdate(
+    {
+      _id: id,
+      assignedVolunteer: volunteerId,
+      status: { $in: [SosStatus.ASSIGNED, SosStatus.ON_THE_WAY] },
+    },
+    {
+      $set: {
+        status: SosStatus.PENDING,
+        assignedVolunteer: null,
+        'dispatch.level': 0,
+        'dispatch.nextActionAt': new Date(),
+        'dispatch.roundOpen': false,
+        'dispatch.unserved': false,
+        // Pausing in the same write leaves no moment in which the engine could offer it to someone else.
+        ...(pause && { 'dispatch.paused': true }),
+      },
+      $unset: { 'dispatch.lastOfferAt': '', 'dispatch.escalatedAt': '' },
+    },
+    { session },
+  )
+  if (!released) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+}
+
+// Stops or restarts automatic offers for one request. 404 unknown, 409 finished or already in that state.
+const setDispatchPaused = async (id: string, paused: boolean) => {
+  const updated = await SosRequest.findOneAndUpdate(
+    {
+      _id: id,
+      status: { $nin: [...SOS_FINISHED_STATUSES] },
+      'dispatch.paused': paused ? { $ne: true } : true,
+    },
+    { $set: { 'dispatch.paused': paused } },
+  )
+  if (updated) return
+  const existing = await SosRequest.findById(id).select('status').lean()
+  if (!existing) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+  throw new AppError(
+    httpStatus.CONFLICT,
+    SOS_FINISHED_STATUSES.includes(existing.status)
+      ? `This SOS request is already ${existing.status}`
+      : `Automatic dispatch is already ${paused ? 'paused' : 'running'} for this request`,
+  )
+}
+
+// The full view an admin or NGO sees, with the dispatch block.
+const getStaffView = async (id: string) => {
+  const sos = await findPopulated({ _id: id })
+  if (!sos) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+  return toStaffView(sos)
 }
 
 // Everyone asked said no: bring the next dispatch step forward to now (only while a round is open).
@@ -1056,6 +1162,10 @@ export const SosService = {
   saveDispatchState,
   scheduleDispatchNow,
   getStatusAndPriority,
+  getDispatchSubject,
+  unassignToPending,
+  setDispatchPaused,
+  getStaffView,
   releaseToPending,
   claimForVolunteer,
   advanceForVolunteer,

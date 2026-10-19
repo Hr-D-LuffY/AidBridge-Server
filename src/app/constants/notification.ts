@@ -39,6 +39,7 @@ export const NotificationType = {
   TASK_OFFERED: 'task_offered',
   OFFER_EXPIRED: 'offer_expired',
   SOS_UNSERVED: 'sos_unserved',
+  TASK_ASSIGNED: 'task_assigned',
 } as const
 
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType]
@@ -124,6 +125,12 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
     category: NotificationCategory.TASKS,
     emailable: false,
     mandatory: false,
+  },
+  // An admin gave the volunteer the request directly (no offer to answer). Mandatory: they must act on it.
+  [NotificationType.TASK_ASSIGNED]: {
+    category: NotificationCategory.TASKS,
+    emailable: false,
+    mandatory: true,
   },
   // To admins and NGOs: nobody could be found for a request. Mandatory, not emailed.
   [NotificationType.SOS_UNSERVED]: {

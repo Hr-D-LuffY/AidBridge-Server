@@ -17,6 +17,13 @@ export const AuditAction = {
   CAMP_VOLUNTEER_UNASSIGNED: 'camp_volunteer_unassigned',
   CAMP_DELETED: 'camp_deleted',
   BROADCAST_SENT: 'broadcast_sent',
+  DISPATCH_SETTINGS_CHANGED: 'dispatch_settings_changed',
+  SOS_OFFERED: 'sos_offered',
+  SOS_ASSIGNED: 'sos_assigned',
+  SOS_UNASSIGNED: 'sos_unassigned',
+  SOS_DISPATCH_RUN: 'sos_dispatch_run',
+  SOS_DISPATCH_PAUSED: 'sos_dispatch_paused',
+  SOS_DISPATCH_RESUMED: 'sos_dispatch_resumed',
 } as const
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction]
@@ -29,6 +36,7 @@ export const AuditTargetType = {
   INCIDENT: 'incident',
   CAMP: 'camp',
   NOTIFICATION: 'notification',
+  DISPATCH_SETTINGS: 'dispatch_settings',
 } as const
 
 export type AuditTargetType = (typeof AuditTargetType)[keyof typeof AuditTargetType]

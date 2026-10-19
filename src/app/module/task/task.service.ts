@@ -246,12 +246,14 @@ interface OfferInput {
   offeredAt: Date
   expiresAt: Date
   source: OfferSource
+  // An admin may re-offer to a volunteer whose earlier offer ran out; the engine never does.
+  reopenExpired?: boolean
 }
 
 // Creates the offers and answers the ids that were really created: a volunteer who already has a task
 // on this request is skipped without error.
 const createOffers = async (input: OfferInput) => {
-  const { sosRequest, victim, volunteerIds, offeredAt, expiresAt, source } = input
+  const { sosRequest, victim, volunteerIds, offeredAt, expiresAt, source, reopenExpired } = input
   const created: string[] = []
   for (const volunteer of volunteerIds) {
     const result = await Task.updateOne(
@@ -267,9 +269,45 @@ const createOffers = async (input: OfferInput) => {
       },
       { upsert: true },
     )
-    if (result.upsertedCount > 0) created.push(volunteer)
+    if (result.upsertedCount > 0) {
+      created.push(volunteer)
+      continue
+    }
+    if (!reopenExpired) continue
+    const reopened = await Task.updateOne(
+      { sosRequest, volunteer, status: TaskStatus.EXPIRED },
+      {
+        $set: {
+          status: TaskStatus.PENDING,
+          offeredAt,
+          offerExpiresAt: expiresAt,
+          offerSource: source,
+        },
+      },
+    )
+    if (reopened.modifiedCount > 0) created.push(volunteer)
   }
   return created
+}
+
+// An admin takes the request off its volunteer: their live task (accepted or on the way) is cancelled,
+// inside the caller's transaction. 409 when they no longer hold one.
+const cancelActiveTask = async (
+  session: ClientSession,
+  sosId: string,
+  volunteerId: string,
+  note: string,
+) => {
+  const task = await Task.findOneAndUpdate(
+    {
+      sosRequest: sosId,
+      volunteer: volunteerId,
+      status: { $in: [...TASK_ACTIVE_STATUSES] },
+    },
+    { $set: { status: TaskStatus.CANCELLED, notes: note } },
+    { session },
+  )
+  if (!task) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
 }
 
 // Everyone who already has a task (any status) on the request: they are never offered it again.
@@ -684,6 +722,7 @@ export const TaskService = {
   withdrawAccepted,
   cancelOpenTasks,
   cancelOtherOffers,
+  cancelActiveTask,
   createOffers,
   listVolunteerIdsWithTask,
   countActiveByVolunteer,

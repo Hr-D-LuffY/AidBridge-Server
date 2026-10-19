@@ -10,6 +10,7 @@ import { AnalyticsRoutes } from './app/module/analytics/analytics.route'
 import { AuditRoutes } from './app/module/audit/audit.route'
 import { AuthRoutes } from './app/module/auth/auth.route'
 import { CampRoutes } from './app/module/camp/camp.route'
+import { DispatchRoutes, SosDispatchRoutes } from './app/module/dispatch/dispatch.route'
 import { DistributionRoutes } from './app/module/distribution/distribution.route'
 import { IncidentRoutes } from './app/module/incident/incident.route'
 import { InventoryRoutes } from './app/module/inventory/inventory.route'
@@ -57,7 +58,9 @@ app.use('/api/v1/auth', authLimiter, AuthRoutes)
 app.use('/api/v1/users', UserRoutes)
 app.use('/api/v1/volunteer-requests', VolunteerRequestRoutes)
 app.use('/api/v1/sos/:sosId/messages', MessageRoutes)
+app.use('/api/v1/sos', SosDispatchRoutes)
 app.use('/api/v1/sos', SosRoutes)
+app.use('/api/v1/dispatch', DispatchRoutes)
 app.use('/api/v1/tasks', TaskRoutes)
 app.use('/api/v1/inventory', InventoryRoutes)
 app.use('/api/v1/camps', CampRoutes)

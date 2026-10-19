@@ -85,6 +85,9 @@ export const SosEventType = {
   UNSERVED: 'unserved',
   SET_OFF_TIMEOUT: 'set_off_timeout',
   BACKED_OUT: 'backed_out',
+  UNASSIGNED: 'unassigned',
+  PAUSED: 'paused',
+  RESUMED: 'resumed',
   ON_THE_WAY: 'on_the_way',
   COMPLETED: 'completed',
 } as const
@@ -93,5 +96,24 @@ export type SosEventType = (typeof SosEventType)[keyof typeof SosEventType]
 
 export const TIMELINE_DEFAULT_LIMIT = 100
 export const TIMELINE_MAX_LIMIT = 100
+
+// Bounds the settings route enforces (and sends to the client so its form can mirror them).
+const range = (min: number, max: number) => ({ min, max })
+export const DISPATCH_SETTINGS_LIMITS = {
+  waitMinutes: range(1, 1440),
+  offerWindowMinutes: range(1, 120),
+  radiusKm: range(1, 200),
+  radiusFactor: range(1, 5),
+  volunteersPerRound: range(1, 10),
+  maxRounds: range(1, 10),
+  retryIntervalMinutes: range(1, 1440),
+  setOffWithinMinutes: range(1, 240),
+  weight: range(0, 1),
+} as const
+
+// The five score weights must add up to 1, give or take this much (so 0.1 + 0.2 + 0.7 is fine).
+export const WEIGHT_SUM_TOLERANCE = 0.001
+
+export const MAX_DISPATCH_NOTE_LENGTH = 500
 
 export const SET_OFF_TIMEOUT_NOTE = 'Did not set off in time, so the request was offered to others'

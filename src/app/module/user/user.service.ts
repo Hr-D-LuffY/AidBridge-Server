@@ -340,6 +340,9 @@ const DISPATCH_DISTANCE_FIELD = 'distanceMetersFromRequest'
 
 export interface DispatchCandidateRow {
   _id: Types.ObjectId
+  name: string
+  phone?: string | null
+  languages?: string[]
   distanceMeters: number
   reliabilityScore: number
   skills?: Skill[]
@@ -368,6 +371,9 @@ const findDispatchCandidates = (nearby: NearbyQuery, excludeIds: Types.ObjectId[
     {
       $project: {
         distanceMeters: `$${DISPATCH_DISTANCE_FIELD}`,
+        name: 1,
+        phone: 1,
+        languages: 1,
         reliabilityScore: 1,
         skills: 1,
         noShowCount: 1,
@@ -376,6 +382,26 @@ const findDispatchCandidates = (nearby: NearbyQuery, excludeIds: Types.ObjectId[
       },
     },
   ])
+
+// The volunteer an admin wants to give a request to: an active volunteer account, or null.
+const getAssignableVolunteer = async (id: string) => {
+  const volunteer = await User.findOne({
+    _id: id,
+    role: Role.VOLUNTEER,
+    isDeleted: false,
+    isBlocked: { $ne: true },
+  })
+    .select('name isAvailable onDutyUntil')
+    .lean()
+  return volunteer
+    ? {
+        id: String(volunteer._id),
+        name: volunteer.name,
+        isAvailable: volunteer.isAvailable,
+        onDutyUntil: volunteer.onDutyUntil ?? null,
+      }
+    : null
+}
 
 // Admins and NGOs who can be told something needs a human (a request nobody could take).
 const listStaffIds = async () => {
@@ -400,6 +426,7 @@ const countRegistered = (range: DateRange) =>
 
 export const UserService = {
   findDispatchCandidates,
+  getAssignableVolunteer,
   listStaffIds,
   incrementNoShow,
   getNotificationTargets,
