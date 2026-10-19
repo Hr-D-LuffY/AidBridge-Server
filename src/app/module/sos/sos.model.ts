@@ -60,6 +60,24 @@ const sosSchema = new Schema(
     resolvedAt: { type: Date },
     resolvedBy: { type: String, enum: RESOLVED_BY_VALUES },
     resolveReason: { type: String, trim: true, maxlength: MAX_SOS_RESOLVE_REASON_LENGTH },
+    // The dispatch engine's bookkeeping (see module/dispatch). Requests that existed before it have none
+    // of this; readers fall back to the defaults and the engine fills `nextActionAt` in.
+    dispatch: {
+      // How many times a round ended with nobody accepting; decides how far the search reaches.
+      level: { type: Number, default: 0, min: 0 },
+      // When the engine next looks at this request. Absent until it has been scheduled.
+      nextActionAt: { type: Date },
+      lastOfferAt: { type: Date },
+      // True while offers are out and their round has not been closed yet.
+      roundOpen: { type: Boolean, default: false },
+      // No volunteer could be found after the maximum number of rounds; retried on a slower beat.
+      unserved: { type: Boolean, default: false },
+      escalatedAt: { type: Date },
+      // The engine raised the priority one step because the request stayed unanswered.
+      priorityBumped: { type: Boolean, default: false },
+      // An admin is handling it by hand: no automatic offers (the controls arrive in commit 16).
+      paused: { type: Boolean, default: false },
+    },
   },
   { timestamps: true, versionKey: false },
 )
@@ -72,6 +90,8 @@ sosSchema.index({ victim: 1, createdAt: -1 })
 // A volunteer's list of the requests they took, newest first, and the staff list with no filter.
 sosSchema.index({ assignedVolunteer: 1, createdAt: -1 })
 sosSchema.index({ createdAt: -1 })
+// The dispatch job: pending requests whose next action is due.
+sosSchema.index({ status: 1, 'dispatch.nextActionAt': 1 })
 // `GET /sos?q=`: one text index over the description and address. The description counts double. The
 // language is "none" so the words of any language (Bangla included) are matched as written, without
 // English stemming; it matches whole words, not parts of words. A collection may have only one.

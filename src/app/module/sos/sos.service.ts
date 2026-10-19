@@ -1,6 +1,7 @@
 import httpStatus from 'http-status'
 import { type ClientSession, type QueryFilter, Types } from 'mongoose'
 import { AuditAction, AuditTargetType } from '../../constants/audit'
+import { SosEventType } from '../../constants/dispatch'
 import { NotificationType } from '../../constants/notification'
 import { Role } from '../../constants/role'
 import {
@@ -34,6 +35,8 @@ import { assertTransition } from '../../utils/transitions'
 import { AuditService } from '../audit/audit.service'
 import { Incident } from '../incident/incident.model'
 import { NotificationService } from '../notification/notification.service'
+import type { TimelineQuery } from '../sos-event/sos-event.interface'
+import { SosEventService } from '../sos-event/sos-event.service'
 import { TaskService } from '../task/task.service'
 import { User } from '../user/user.model'
 import type {
@@ -99,6 +102,29 @@ const toFullView = (sos: SosRecord) => ({
   resolveReason: sos.resolveReason ?? null,
   createdAt: sos.createdAt,
   updatedAt: sos.updatedAt,
+})
+
+interface DispatchFields {
+  level?: number | null
+  nextActionAt?: Date | null
+  unserved?: boolean | null
+  priorityBumped?: boolean | null
+  paused?: boolean | null
+}
+
+// What admins and NGOs see of the engine's bookkeeping. A request from before dispatch existed has
+// none of it, so every field falls back to its default. Victims and volunteers never get this.
+const toDispatchView = (dispatch?: DispatchFields | null) => ({
+  level: dispatch?.level ?? 0,
+  nextActionAt: dispatch?.nextActionAt ?? null,
+  unserved: dispatch?.unserved ?? false,
+  priorityBumped: dispatch?.priorityBumped ?? false,
+  paused: dispatch?.paused ?? false,
+})
+
+const toStaffView = (sos: SosRecord) => ({
+  ...toFullView(sos),
+  dispatch: toDispatchView(sos.dispatch),
 })
 
 interface LimitedSource {
@@ -193,12 +219,13 @@ const toObjectId = (id: string) => new Types.ObjectId(id)
 // Admins and NGOs see every request, and alone may filter by incident, volunteer or victim. Everyone
 // else sees the ones they raised or were assigned.
 const buildListFilter = async (viewer: TokenPayload, query: ListSosQuery) => {
-  const { status, priority, needs, q, from, to, incidentId, volunteerId, victimId } = query
+  const { status, priority, needs, q, from, to, incidentId, volunteerId, victimId, unserved } =
+    query
   const isStaff = viewer.role === Role.ADMIN || viewer.role === Role.NGO
-  if (!isStaff && (incidentId || volunteerId || victimId)) {
+  if (!isStaff && (incidentId || volunteerId || victimId || unserved !== undefined)) {
     throw new AppError(
       httpStatus.FORBIDDEN,
-      'Only an admin or an NGO can filter by incident, volunteer or victim',
+      'Only an admin or an NGO can filter by incident, volunteer, victim or unserved',
     )
   }
 
@@ -211,6 +238,8 @@ const buildListFilter = async (viewer: TokenPayload, query: ListSosQuery) => {
   if (needs) filter.needs = { $in: needs }
   if (volunteerId) filter.assignedVolunteer = toObjectId(volunteerId)
   if (victimId) filter.victim = toObjectId(victimId)
+  // A request from before dispatch existed has no flag, so "not unserved" is "not true", not "false".
+  if (unserved !== undefined) filter['dispatch.unserved'] = unserved ? true : { $ne: true }
   // The user's words go to MongoDB's text search as data. Nothing is built into a regex.
   if (q) filter.$text = { $search: q }
 
@@ -263,7 +292,11 @@ const listSos = async (viewer: TokenPayload, query: ListSosQuery) => {
   }
 
   const [items, total] = await Promise.all([loadPage(), SosRequest.countDocuments(filter)])
-  return { items: items.map(toFullView), meta: buildMeta({ page, limit }, total) }
+  const isStaff = viewer.role === Role.ADMIN || viewer.role === Role.NGO
+  return {
+    items: items.map(isStaff ? toStaffView : toFullView),
+    meta: buildMeta({ page, limit }, total),
+  }
 }
 
 // Pending requests around a point, nearest first, for a volunteer's map. Always the limited view:
@@ -332,7 +365,8 @@ const getSosById = async (viewer: TokenPayload, id: string) => {
   if (isOwner) {
     return { ...toFullView(sos), task: await TaskService.getVictimSummary(id, viewer.id) }
   }
-  if (isAssigned || isStaff) return toFullView(sos)
+  if (isStaff) return toStaffView(sos)
+  if (isAssigned) return toFullView(sos)
 
   if (viewer.role === Role.VOLUNTEER && sos.status === SosStatus.PENDING) {
     return toLimitedView(sos)
@@ -444,7 +478,7 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
   assertTransition(SOS_TRANSITIONS, existing.status, SosStatus.CLOSED, 'SOS request')
 
   // The request closes and every unfinished task on it is cancelled, or neither happens.
-  await runInTransaction(async (session) => {
+  const heldBy = await runInTransaction(async (session) => {
     const closed = await SosRequest.findOneAndUpdate(
       openOwnedFilter(id, victimId),
       {
@@ -458,18 +492,28 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
       { runValidators: true, session },
     )
     if (!closed) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
-    await TaskService.cancelOpenTasks(session, id, payload.resolveReason)
+    return TaskService.cancelOpenTasks(session, id, payload.resolveReason)
   })
 
-  if (existing.assignedVolunteer) {
+  const assignedId = existing.assignedVolunteer ? String(existing.assignedVolunteer) : null
+  if (assignedId) {
     await NotificationService.notifyUsers({
-      userIds: [String(existing.assignedVolunteer)],
+      userIds: [assignedId],
       type: NotificationType.TASK_CANCELLED,
       title: 'SOS request closed',
       message: `The victim closed an SOS request you were working on: ${payload.resolveReason}`,
       sosRequestId: id,
     })
   }
+  // Volunteers who were only offered it are told too, so the offer does not sit in their list.
+  await NotificationService.notifyUsers({
+    userIds: heldBy.filter((volunteerId) => volunteerId !== assignedId),
+    type: NotificationType.TASK_CANCELLED,
+    title: 'SOS request closed',
+    message:
+      'The victim closed an SOS request that was offered to you. You do not need to respond.',
+    sosRequestId: id,
+  })
 
   return getFullView(id)
 }
@@ -539,7 +583,13 @@ const setPriority = async (admin: TokenPayload, id: string, priority: Priority) 
 const claimForVolunteer = async (session: ClientSession, id: string, volunteerId: string) => {
   const claimed = await SosRequest.findOneAndUpdate(
     { _id: id, status: SosStatus.PENDING },
-    { $set: { status: SosStatus.ASSIGNED, assignedVolunteer: volunteerId } },
+    {
+      $set: {
+        status: SosStatus.ASSIGNED,
+        assignedVolunteer: volunteerId,
+        'dispatch.roundOpen': false,
+      },
+    },
     { session },
   )
   if (!claimed) {
@@ -547,14 +597,67 @@ const claimForVolunteer = async (session: ClientSession, id: string, volunteerId
   }
 }
 
-// Assigned -> pending again, only for the volunteer currently holding it.
+// Assigned -> pending again, only for the volunteer currently holding it. Dispatch starts over from
+// the beginning and acts on the next tick: the request has already waited once.
 const releaseToPending = async (session: ClientSession, id: string, volunteerId: string) => {
   const released = await SosRequest.findOneAndUpdate(
     { _id: id, assignedVolunteer: volunteerId, status: SosStatus.ASSIGNED },
-    { $set: { status: SosStatus.PENDING, assignedVolunteer: null } },
+    {
+      $set: {
+        status: SosStatus.PENDING,
+        assignedVolunteer: null,
+        'dispatch.level': 0,
+        'dispatch.nextActionAt': new Date(),
+        'dispatch.roundOpen': false,
+        'dispatch.unserved': false,
+      },
+      $unset: { 'dispatch.lastOfferAt': '', 'dispatch.escalatedAt': '' },
+    },
     { session },
   )
   if (!released) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+}
+
+interface AcceptanceInput {
+  sosId: string
+  victimId: string
+  volunteerId: string
+  volunteerName?: string
+  // Volunteers whose open offers were withdrawn because this one took the request.
+  withdrawnVolunteerIds: string[]
+}
+
+// After a volunteer's claim has committed: the victim is told who is coming, the volunteers whose offers
+// were withdrawn are told it is taken, and the timeline records both. Shared by the two ways of
+// accepting (`PUT /sos/:id/accept` and answering an offer with `PUT /tasks/:id/respond`).
+const announceAcceptance = async (input: AcceptanceInput) => {
+  const { sosId, victimId, volunteerId, volunteerName, withdrawnVolunteerIds } = input
+  await NotificationService.notifyUsers({
+    userIds: [victimId],
+    type: NotificationType.SOS_ASSIGNED,
+    title: 'A volunteer accepted your request',
+    message: `${volunteerName ?? 'A volunteer'} accepted your SOS request and will set off soon.`,
+    sosRequestId: sosId,
+  })
+  await NotificationService.notifyUsers({
+    userIds: withdrawnVolunteerIds,
+    type: NotificationType.TASK_CANCELLED,
+    title: 'Request taken',
+    message: 'Another volunteer took the SOS request that was offered to you.',
+    sosRequestId: sosId,
+  })
+  await SosEventService.record(
+    { sos: sosId, type: SosEventType.ACCEPTED, actorId: volunteerId, subjectId: volunteerId },
+    ...(withdrawnVolunteerIds.length > 0
+      ? [
+          {
+            sos: sosId,
+            type: SosEventType.OFFERS_WITHDRAWN,
+            meta: { count: withdrawnVolunteerIds.length },
+          },
+        ]
+      : []),
+  )
 }
 
 // What each task progress step does to the request it belongs to.
@@ -591,24 +694,29 @@ const acceptSos = async (volunteerId: string, id: string) => {
   }
   await TaskService.assertCanTakeAnotherTask(volunteerId)
 
-  // Claiming the request and creating the task stand or fall together.
-  const taskId = await runInTransaction(async (session) => {
+  // Claiming the request, creating the task and withdrawing the offers still out to others stand or
+  // fall together.
+  const { taskId, withdrawn } = await runInTransaction(async (session) => {
     await claimForVolunteer(session, id, volunteerId)
-    return TaskService.createAccepted(session, {
+    const created = await TaskService.createAccepted(session, {
       sosRequest: id,
       volunteer: volunteerId,
       victim: String(sos.victim),
     })
+    return {
+      taskId: created,
+      withdrawn: await TaskService.cancelOtherOffers(session, id, volunteerId),
+    }
   })
 
   const [sosRequest, task] = await Promise.all([getFullView(id), TaskService.getView(taskId)])
 
-  await NotificationService.notifyUsers({
-    userIds: [String(sos.victim)],
-    type: NotificationType.SOS_ASSIGNED,
-    title: 'A volunteer accepted your request',
-    message: `${sosRequest.assignedVolunteer?.name ?? 'A volunteer'} accepted your SOS request and will set off soon.`,
-    sosRequestId: id,
+  await announceAcceptance({
+    sosId: id,
+    victimId: String(sos.victim),
+    volunteerId,
+    volunteerName: sosRequest.assignedVolunteer?.name,
+    withdrawnVolunteerIds: withdrawn,
   })
   return { sosRequest, task }
 }
@@ -632,6 +740,12 @@ const rejectSos = async (volunteerId: string, id: string) => {
       await TaskService.withdrawAccepted(session, id, volunteerId)
     })
 
+    await SosEventService.record({
+      sos: id,
+      type: SosEventType.BACKED_OUT,
+      actorId: volunteerId,
+      subjectId: volunteerId,
+    })
     await NotificationService.notifyUsers({
       userIds: [String(sos.victim)],
       type: NotificationType.VOLUNTEER_BACKED_OUT,
@@ -646,12 +760,178 @@ const rejectSos = async (volunteerId: string, id: string) => {
   if (sos.status !== SosStatus.PENDING) {
     throw new AppError(httpStatus.CONFLICT, `Cannot decline: the request is already ${sos.status}`)
   }
+  // Declining a request that was offered to them is an answer dispatch needs to hear; hiding one they
+  // only saw on their map is not.
+  const wasOffered = (await TaskService.getStatusFor(id, volunteerId)) === TaskStatus.PENDING
   await TaskService.recordRejection({
     sosRequest: id,
     volunteer: volunteerId,
     victim: String(sos.victim),
   })
+  if (wasOffered) await TaskService.afterOfferDeclined(id, volunteerId, new Date())
   return { sosRequestId: id, outcome: 'declined' as const }
+}
+
+// --- Dispatch state: the engine in module/dispatch drives these ---------------------------------
+// The fields live on the request, so the queries live here; the decisions are in dispatch.service.
+
+export interface DueSos {
+  id: string
+  victimId: string
+  priority: Priority
+  needs: ReliefCategory[]
+  requiredSkills: Skill[]
+  coordinates: Coordinates
+  createdAt: Date
+  dispatch: {
+    level: number
+    nextActionAt: Date
+    roundOpen: boolean
+    unserved: boolean
+    priorityBumped: boolean
+  }
+}
+
+// Pending requests whose next action has come, oldest due first. A paused request is left alone.
+const listDueForDispatch = async (now: Date, limit: number): Promise<DueSos[]> => {
+  const due = await SosRequest.find({
+    status: SosStatus.PENDING,
+    'dispatch.paused': { $ne: true },
+    'dispatch.nextActionAt': { $lte: now },
+  })
+    .sort({ 'dispatch.nextActionAt': 1 })
+    .limit(limit)
+    .select('victim priority needs requiredSkills location createdAt dispatch')
+    .lean()
+
+  return due.flatMap((sos) =>
+    sos.dispatch?.nextActionAt
+      ? [
+          {
+            id: String(sos._id),
+            victimId: String(sos.victim),
+            priority: sos.priority,
+            needs: sos.needs,
+            requiredSkills: sos.requiredSkills ?? [],
+            // Validated on write, so a [lng, lat] pair.
+            coordinates: sos.location.coordinates as Coordinates,
+            createdAt: sos.createdAt,
+            dispatch: {
+              level: sos.dispatch.level ?? 0,
+              nextActionAt: sos.dispatch.nextActionAt,
+              roundOpen: sos.dispatch.roundOpen ?? false,
+              unserved: sos.dispatch.unserved ?? false,
+              priorityBumped: sos.dispatch.priorityBumped ?? false,
+            },
+          },
+        ]
+      : [],
+  )
+}
+
+// Gives every pending request that has never been scheduled its first action time. New requests, and
+// ones from before dispatch existed, are picked up this way, so creating a request needs no knowledge
+// of the engine. Answers how many were scheduled.
+const scheduleUnscheduled = async (
+  firstOfferAt: (createdAt: Date, priority: Priority) => Date,
+  limit: number,
+) => {
+  const unscheduled = await SosRequest.find({
+    status: SosStatus.PENDING,
+    'dispatch.nextActionAt': { $exists: false },
+  })
+    .limit(limit)
+    .select('createdAt priority')
+    .lean()
+  if (unscheduled.length === 0) return 0
+
+  await SosRequest.bulkWrite(
+    unscheduled.map((sos) => ({
+      updateOne: {
+        filter: { _id: sos._id, 'dispatch.nextActionAt': { $exists: false } },
+        update: { $set: { 'dispatch.nextActionAt': firstOfferAt(sos.createdAt, sos.priority) } },
+      },
+    })),
+  )
+  return unscheduled.length
+}
+
+// Takes this request's turn: moves `nextActionAt` from the value that was read to a lease in the
+// future. Of two server instances reading the same due request, only one matches, so only one acts.
+const claimDispatchTurn = async (id: string, expected: Date, leaseUntil: Date) => {
+  const claimed = await SosRequest.findOneAndUpdate(
+    {
+      _id: id,
+      status: SosStatus.PENDING,
+      'dispatch.paused': { $ne: true },
+      'dispatch.nextActionAt': expected,
+    },
+    { $set: { 'dispatch.nextActionAt': leaseUntil } },
+  )
+  return claimed !== null
+}
+
+export interface DispatchPatch {
+  level?: number
+  nextActionAt?: Date
+  lastOfferAt?: Date
+  roundOpen?: boolean
+  unserved?: boolean
+  escalatedAt?: Date
+  priorityBumped?: boolean
+  // The engine raised the priority one step (recorded with `priorityBumped`).
+  priority?: Priority
+}
+
+// Writes the engine's state, only while the request is still pending. False means someone took or closed
+// it in the meantime, so what the engine just did (offers) must be undone by the caller.
+const saveDispatchState = async (id: string, patch: DispatchPatch) => {
+  const { priority, ...state } = patch
+  const set: Record<string, unknown> = {}
+  for (const [field, value] of Object.entries(state)) {
+    if (value !== undefined) set[`dispatch.${field}`] = value
+  }
+  if (priority) set.priority = priority
+  const saved = await SosRequest.findOneAndUpdate(
+    { _id: id, status: SosStatus.PENDING },
+    { $set: set },
+  )
+  return saved !== null
+}
+
+// Everyone asked said no: bring the next dispatch step forward to now (only while a round is open).
+const scheduleDispatchNow = async (id: string) => {
+  await SosRequest.updateOne(
+    { _id: id, status: SosStatus.PENDING, 'dispatch.roundOpen': true },
+    { $set: { 'dispatch.nextActionAt': new Date() } },
+  )
+}
+
+// Current status and priority of these requests, in one query.
+const getStatusAndPriority = async (ids: string[]) => {
+  const found = await SosRequest.find({ _id: { $in: ids } })
+    .select('status priority')
+    .lean()
+  return new Map(
+    found.map((sos) => [String(sos._id), { status: sos.status, priority: sos.priority }]),
+  )
+}
+
+// What happened to a request, oldest first: offers, answers, escalations, progress. The victim, the
+// volunteers who have a part in it, admins and NGOs may read it; only staff see names.
+const getTimeline = async (viewer: TokenPayload, id: string, query: TimelineQuery) => {
+  const sos = await SosRequest.findById(id).select('victim assignedVolunteer').lean()
+  if (!sos) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+
+  const isStaff = viewer.role === Role.ADMIN || viewer.role === Role.NGO
+  const isVictim = String(sos.victim) === viewer.id
+  const isAssigned = sos.assignedVolunteer !== null && String(sos.assignedVolunteer) === viewer.id
+  const involved =
+    isStaff || isVictim || isAssigned || (await TaskService.hasInvolvement(id, viewer.id))
+  if (!involved) {
+    throw new AppError(httpStatus.FORBIDDEN, 'You do not have access to this SOS request')
+  }
+  return SosEventService.listTimeline(id, query, isStaff)
 }
 
 // --- Questions other modules ask ---------------------------------------------------------------
@@ -768,6 +1048,15 @@ export const SosService = {
   setPriority,
   acceptSos,
   rejectSos,
+  getTimeline,
+  announceAcceptance,
+  listDueForDispatch,
+  scheduleUnscheduled,
+  claimDispatchTurn,
+  saveDispatchState,
+  scheduleDispatchNow,
+  getStatusAndPriority,
+  releaseToPending,
   claimForVolunteer,
   advanceForVolunteer,
   viewForTask,

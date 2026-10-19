@@ -124,6 +124,11 @@ export const listSosQuerySchema = z
     incidentId: objectIdSchema.optional(),
     volunteerId: objectIdSchema.optional(),
     victimId: objectIdSchema.optional(),
+    // `true`: requests dispatch gave up finding a volunteer for; `false`: all the others.
+    unserved: z
+      .enum(['true', 'false'], { error: 'unserved must be true or false' })
+      .optional()
+      .transform((value) => (value === undefined ? undefined : value === 'true')),
   })
   .refine((query) => !query.from || !query.to || query.from <= query.to, {
     message: '"from" must not be after "to"',

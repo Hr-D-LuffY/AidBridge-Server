@@ -1,7 +1,9 @@
 import httpStatus from 'http-status'
 import type { ClientSession, QueryFilter, Types } from 'mongoose'
+import { type OfferSource, SosEventType } from '../../constants/dispatch'
 import {
   MAX_ACTIVE_TASKS_PER_VOLUNTEER,
+  OFFER_TAKEN_NOTE,
   RespondAction,
   TASK_ACTIVE_STATUSES,
   TASK_OPEN_STATUSES,
@@ -22,6 +24,7 @@ import { buildMeta, getPagination } from '../../utils/pagination'
 import { assertTransition } from '../../utils/transitions'
 import { type SosRecord, SosService, SOS_PEOPLE_POPULATE } from '../sos/sos.service'
 import { NotificationService } from '../notification/notification.service'
+import { SosEventService } from '../sos-event/sos-event.service'
 import { UserService } from '../user/user.service'
 import type {
   ListTasksQuery,
@@ -33,6 +36,7 @@ import { Task } from './task.model'
 
 const TASK_NOT_FOUND_MESSAGE = 'Task not found'
 const RACE_MESSAGE = 'This task changed while you were updating it. Please try again'
+const OFFER_EXPIRED_MESSAGE = 'This offer has expired'
 const CANCELLED_NOTE_PREFIX = 'SOS resolved by the victim before completion. Reason: '
 
 // The volunteer sees the victim's phone and exact position only once they have taken the request.
@@ -49,6 +53,9 @@ interface TaskFields {
   completedAt?: Date | null
   notes?: string | null
   isRated: boolean
+  offeredAt?: Date | null
+  offerExpiresAt?: Date | null
+  offerSource?: OfferSource | null
   createdAt: Date
   updatedAt: Date
   sosRequest: SosRecord
@@ -61,6 +68,15 @@ const toTaskView = (task: TaskFields) => ({
   completedAt: task.completedAt ?? null,
   notes: task.notes ?? null,
   isRated: task.isRated,
+  // Present when the task started as an offer. A pending task with an offer is waiting for an answer
+  // until `expiresAt`; after that it is `expired`.
+  offer: task.offerExpiresAt
+    ? {
+        source: task.offerSource ?? null,
+        offeredAt: task.offeredAt ?? null,
+        expiresAt: task.offerExpiresAt,
+      }
+    : null,
   sosRequest: SosService.viewForTask(
     task.sosRequest,
     CONTACT_VISIBLE_STATUSES.includes(task.status),
@@ -154,13 +170,14 @@ interface TaskOwners {
   victim: string
 }
 
-// Creates the volunteer's task as `accepted`, or turns an offered (`pending`) one into it. The
-// filter allows only `pending`, so a declined task can't be silently revived (it would collide on
-// the unique index instead).
+// Creates the volunteer's task as `accepted`, or turns an offered (`pending`) one into it. An offer
+// that ran out (`expired`) can still be taken: the volunteer is choosing it themselves from their
+// nearby list, which an expired offer never hides. The filter allows nothing else, so a declined task
+// can't be silently revived (it would collide on the unique index instead).
 const createAccepted = async (session: ClientSession, owners: TaskOwners) => {
   const { sosRequest, volunteer, victim } = owners
   const task = await Task.findOneAndUpdate(
-    { sosRequest, volunteer, status: TaskStatus.PENDING },
+    { sosRequest, volunteer, status: { $in: [TaskStatus.PENDING, TaskStatus.EXPIRED] } },
     { $set: { status: TaskStatus.ACCEPTED, acceptedAt: new Date(), victim } },
     {
       upsert: true,
@@ -173,11 +190,16 @@ const createAccepted = async (session: ClientSession, owners: TaskOwners) => {
   return String(task._id)
 }
 
-// Records "no thanks" so the request stops appearing for this volunteer. Idempotent.
+// Records "no thanks" so the request stops appearing for this volunteer. Idempotent. A volunteer whose
+// offer ran out can still say no to it themselves.
 const recordRejection = async (owners: TaskOwners) => {
   const { sosRequest, volunteer, victim } = owners
   const task = await Task.findOneAndUpdate(
-    { sosRequest, volunteer, status: { $in: [TaskStatus.PENDING, TaskStatus.REJECTED] } },
+    {
+      sosRequest,
+      volunteer,
+      status: { $in: [TaskStatus.PENDING, TaskStatus.REJECTED, TaskStatus.EXPIRED] },
+    },
     { $set: { status: TaskStatus.REJECTED, victim } },
     { upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true },
   )
@@ -185,29 +207,230 @@ const recordRejection = async (owners: TaskOwners) => {
 }
 
 // A volunteer backing out after accepting but before setting off.
-const withdrawAccepted = async (session: ClientSession, sosId: string, volunteerId: string) => {
+const withdrawAccepted = async (
+  session: ClientSession,
+  sosId: string,
+  volunteerId: string,
+  note?: string,
+) => {
   const task = await Task.findOneAndUpdate(
     { sosRequest: sosId, volunteer: volunteerId, status: TaskStatus.ACCEPTED },
-    { $set: { status: TaskStatus.REJECTED } },
+    { $set: { status: TaskStatus.REJECTED, ...(note && { notes: note }) } },
     { returnDocument: 'after', session },
   )
   if (!task) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
   return String(task._id)
 }
 
-// The victim resolved the request: every unfinished task on it ends as cancelled.
+// The victim resolved the request: every unfinished task on it ends as cancelled. Answers who held
+// them (the volunteer who accepted, and everyone with an open offer) so the caller can tell them.
 const cancelOpenTasks = async (session: ClientSession, sosId: string, reason: string) => {
+  const filter = { sosRequest: sosId, status: { $in: [...TASK_OPEN_STATUSES] } }
+  const open = await Task.find(filter).select('volunteer').session(session).lean()
   await Task.updateMany(
-    { sosRequest: sosId, status: { $in: [...TASK_OPEN_STATUSES] } },
+    filter,
     { $set: { status: TaskStatus.CANCELLED, notes: `${CANCELLED_NOTE_PREFIX}"${reason}"` } },
     { session },
   )
+  return open.map((task) => String(task.volunteer))
+}
+
+// --- Offers (dispatch, commit 15) ---------------------------------------------------------------
+// An offer is a `pending` task with an expiry. The unique (request, volunteer) index means a volunteer
+// is offered a request at most once, whatever happened to the earlier offer.
+
+interface OfferInput {
+  sosRequest: string
+  victim: string
+  volunteerIds: string[]
+  offeredAt: Date
+  expiresAt: Date
+  source: OfferSource
+}
+
+// Creates the offers and answers the ids that were really created: a volunteer who already has a task
+// on this request is skipped without error.
+const createOffers = async (input: OfferInput) => {
+  const { sosRequest, victim, volunteerIds, offeredAt, expiresAt, source } = input
+  const created: string[] = []
+  for (const volunteer of volunteerIds) {
+    const result = await Task.updateOne(
+      { sosRequest, volunteer },
+      {
+        $setOnInsert: {
+          victim,
+          status: TaskStatus.PENDING,
+          offeredAt,
+          offerExpiresAt: expiresAt,
+          offerSource: source,
+        },
+      },
+      { upsert: true },
+    )
+    if (result.upsertedCount > 0) created.push(volunteer)
+  }
+  return created
+}
+
+// Everyone who already has a task (any status) on the request: they are never offered it again.
+const listVolunteerIdsWithTask = async (sosId: string) => {
+  const tasks = await Task.find({ sosRequest: sosId }).select('volunteer').lean()
+  return tasks.map((task) => task.volunteer)
+}
+
+// Open tasks per volunteer for these volunteers (the load part of the dispatch score).
+const countActiveByVolunteer = async (volunteerIds: Types.ObjectId[]) => {
+  const rows = await Task.aggregate<{ _id: Types.ObjectId; count: number }>([
+    { $match: { volunteer: { $in: volunteerIds }, status: { $in: [...TASK_ACTIVE_STATUSES] } } },
+    { $group: { _id: '$volunteer', count: { $sum: 1 } } },
+  ])
+  return new Map(rows.map((row) => [String(row._id), row.count]))
+}
+
+// When the last still-open offer on the request runs out, or null when none is open.
+const getLiveOffersExpiry = async (sosId: string, now: Date) => {
+  const latest = await Task.findOne({
+    sosRequest: sosId,
+    status: TaskStatus.PENDING,
+    offerExpiresAt: { $gt: now },
+  })
+    .sort({ offerExpiresAt: -1 })
+    .select('offerExpiresAt')
+    .lean()
+  return latest?.offerExpiresAt ?? null
+}
+
+// Offers on this request that are still open (not past their time).
+const countLiveOffers = (sosId: string, now: Date) =>
+  Task.countDocuments({
+    sosRequest: sosId,
+    status: TaskStatus.PENDING,
+    offerExpiresAt: { $gt: now },
+  })
+
+// Another volunteer took the request, so the offers still out for it are withdrawn. Runs inside the
+// accepting transaction, so no offer can outlive the claim. Answers who to tell.
+const cancelOtherOffers = async (
+  session: ClientSession,
+  sosId: string,
+  exceptVolunteerId: string,
+) => {
+  const filter = {
+    sosRequest: sosId,
+    volunteer: { $ne: exceptVolunteerId },
+    status: TaskStatus.PENDING,
+  }
+  const offers = await Task.find(filter).select('volunteer').session(session).lean()
+  if (offers.length === 0) return []
+  await Task.updateMany(
+    filter,
+    { $set: { status: TaskStatus.CANCELLED, notes: OFFER_TAKEN_NOTE } },
+    { session },
+  )
+  return offers.map((offer) => String(offer.volunteer))
+}
+
+interface TaskRef {
+  id: string
+  sosRequest: string
+  volunteer: string
+}
+
+// Offers whose time is up and nobody answered, oldest first.
+const listDueOffers = async (now: Date, limit: number): Promise<TaskRef[]> => {
+  const tasks = await Task.find({ status: TaskStatus.PENDING, offerExpiresAt: { $lte: now } })
+    .sort({ offerExpiresAt: 1 })
+    .limit(limit)
+    .select('sosRequest volunteer')
+    .lean()
+  return tasks.map((task) => ({
+    id: String(task._id),
+    sosRequest: String(task.sosRequest),
+    volunteer: String(task.volunteer),
+  }))
+}
+
+// pending -> expired (or cancelled, when the request no longer needs it), only if it is still pending
+// and still past its time: of the expiry job and the volunteer answering at the same moment, exactly
+// one wins. True when this call is the one that changed it.
+const closeDueOffer = async (taskId: string, now: Date, to: 'expired' | 'cancelled') => {
+  const closed = await Task.findOneAndUpdate(
+    { _id: taskId, status: TaskStatus.PENDING, offerExpiresAt: { $lte: now } },
+    {
+      $set:
+        to === 'expired'
+          ? { status: TaskStatus.EXPIRED }
+          : { status: TaskStatus.CANCELLED, notes: OFFER_TAKEN_NOTE },
+    },
+  )
+  return closed !== null
+}
+
+// A just-made offer that the request no longer needs (someone took it in the meantime).
+const cancelOffers = async (sosId: string, volunteerIds: string[]) => {
+  await Task.updateMany(
+    { sosRequest: sosId, volunteer: { $in: volunteerIds }, status: TaskStatus.PENDING },
+    { $set: { status: TaskStatus.CANCELLED, notes: OFFER_TAKEN_NOTE } },
+  )
+}
+
+interface AcceptedRef extends TaskRef {
+  victim: string
+  acceptedAt: Date
+}
+
+// Accepted tasks that have waited at least until `cutoff` without setting off, oldest first.
+const listAcceptedBefore = async (cutoff: Date, limit: number): Promise<AcceptedRef[]> => {
+  const tasks = await Task.find({ status: TaskStatus.ACCEPTED, acceptedAt: { $lte: cutoff } })
+    .sort({ acceptedAt: 1 })
+    .limit(limit)
+    .select('sosRequest volunteer victim acceptedAt')
+    .lean()
+  return tasks.flatMap((task) =>
+    task.acceptedAt
+      ? [
+          {
+            id: String(task._id),
+            sosRequest: String(task.sosRequest),
+            volunteer: String(task.volunteer),
+            victim: String(task.victim),
+            acceptedAt: task.acceptedAt,
+          },
+        ]
+      : [],
+  )
+}
+
+// A volunteer said no to an offer: it goes on the timeline, and if nobody else is still being asked the
+// engine is told to widen the search now instead of waiting out the rest of the window.
+const afterOfferDeclined = async (sosId: string, volunteerId: string, now: Date) => {
+  await SosEventService.record({
+    sos: sosId,
+    type: SosEventType.DECLINED,
+    actorId: volunteerId,
+    subjectId: volunteerId,
+  })
+  if ((await countLiveOffers(sosId, now)) === 0) await SosService.scheduleDispatchNow(sosId)
+}
+
+// Whether the volunteer has a part in the request: an open offer, or a task they took on. Declined and
+// expired offers do not count. Decides who may read its timeline.
+const hasInvolvement = async (sosId: string, volunteerId: string) => {
+  const task = await Task.exists({
+    sosRequest: sosId,
+    volunteer: volunteerId,
+    status: {
+      $in: [TaskStatus.PENDING, TaskStatus.ACCEPTED, TaskStatus.ON_THE_WAY, TaskStatus.COMPLETED],
+    },
+  })
+  return task !== null
 }
 
 // --- Task routes ------------------------------------------------------------------------------
 
-// Answer to an offered task. Nothing creates `pending` tasks yet (no allocation feature), so today
-// this only ever finds tasks that are already answered and returns 409.
+// Answer to an offer (a `pending` task made by dispatch or an admin). An offer past its time is a 409,
+// and the same condition sits in the update, so answering at the very moment it expires cannot succeed
+// twice. Accepting also withdraws the offers still out to other volunteers, in the same transaction.
 const respond = async (volunteerId: string, taskId: string, payload: RespondPayload) => {
   const task = await loadOwnTask(taskId, volunteerId)
   if (task.status !== TaskStatus.PENDING) {
@@ -216,25 +439,46 @@ const respond = async (volunteerId: string, taskId: string, payload: RespondPayl
       `This task is already ${task.status} and needs no answer`,
     )
   }
+  const now = new Date()
+  if (task.offerExpiresAt && task.offerExpiresAt <= now) {
+    throw new AppError(httpStatus.CONFLICT, OFFER_EXPIRED_MESSAGE)
+  }
+  const sosId = String(task.sosRequest)
+  const stillOpen = {
+    _id: taskId,
+    volunteer: volunteerId,
+    status: TaskStatus.PENDING,
+    $or: [{ offerExpiresAt: null }, { offerExpiresAt: { $gt: now } }],
+  }
 
   if (payload.action === RespondAction.REJECT) {
-    const rejected = await Task.findOneAndUpdate(
-      { _id: taskId, volunteer: volunteerId, status: TaskStatus.PENDING },
-      { $set: { status: TaskStatus.REJECTED } },
-    )
+    const rejected = await Task.findOneAndUpdate(stillOpen, {
+      $set: { status: TaskStatus.REJECTED },
+    })
     if (!rejected) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+
+    await afterOfferDeclined(sosId, volunteerId, now)
     return getView(taskId)
   }
 
   await assertCanTakeAnotherTask(volunteerId)
-  await runInTransaction(async (session) => {
-    await SosService.claimForVolunteer(session, String(task.sosRequest), volunteerId)
+  const withdrawn = await runInTransaction(async (session) => {
+    await SosService.claimForVolunteer(session, sosId, volunteerId)
     const accepted = await Task.findOneAndUpdate(
-      { _id: taskId, volunteer: volunteerId, status: TaskStatus.PENDING },
-      { $set: { status: TaskStatus.ACCEPTED, acceptedAt: new Date() } },
+      stillOpen,
+      { $set: { status: TaskStatus.ACCEPTED, acceptedAt: now } },
       { session },
     )
     if (!accepted) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+    return cancelOtherOffers(session, sosId, volunteerId)
+  })
+
+  await SosService.announceAcceptance({
+    sosId,
+    victimId: String(task.victim),
+    volunteerId,
+    volunteerName: (await UserService.getDisplayName(volunteerId).catch(() => null)) ?? undefined,
+    withdrawnVolunteerIds: withdrawn,
   })
   return getView(taskId)
 }
@@ -265,6 +509,12 @@ const updateStatus = async (volunteerId: string, taskId: string, payload: TaskSt
   const volunteerName =
     (await UserService.getDisplayName(volunteerId).catch(() => null)) ?? 'Your volunteer'
   const finished = status === TaskStatus.COMPLETED
+  await SosEventService.record({
+    sos: String(task.sosRequest),
+    type: finished ? SosEventType.COMPLETED : SosEventType.ON_THE_WAY,
+    actorId: volunteerId,
+    subjectId: volunteerId,
+  })
   await NotificationService.notifyUsers({
     userIds: [String(task.victim)],
     type: finished ? NotificationType.SOS_RESCUED : NotificationType.SOS_ON_THE_WAY,
@@ -433,4 +683,15 @@ export const TaskService = {
   recordRejection,
   withdrawAccepted,
   cancelOpenTasks,
+  cancelOtherOffers,
+  createOffers,
+  listVolunteerIdsWithTask,
+  countActiveByVolunteer,
+  getLiveOffersExpiry,
+  listDueOffers,
+  closeDueOffer,
+  cancelOffers,
+  listAcceptedBefore,
+  afterOfferDeclined,
+  hasInvolvement,
 }

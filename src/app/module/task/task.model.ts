@@ -1,7 +1,9 @@
 import { Schema, model } from 'mongoose'
+import { OfferSource } from '../../constants/dispatch'
 import { MAX_TASK_NOTES_LENGTH, TaskStatus } from '../../constants/task'
 
 const STATUS_VALUES: TaskStatus[] = Object.values(TaskStatus)
+const OFFER_SOURCE_VALUES: OfferSource[] = Object.values(OfferSource)
 
 // One volunteer's involvement with one SOS request: they accepted it, declined it, or were offered
 // it. At most one task per (request, volunteer), so declining twice is a no-op, not a second row.
@@ -18,6 +20,11 @@ const taskSchema = new Schema(
     notes: { type: String, trim: true, maxlength: MAX_TASK_NOTES_LENGTH },
     // Flipped by the rating write itself, only while the task is completed and not yet rated.
     isRated: { type: Boolean, default: false },
+    // Set only when the task started as an offer (a `pending` task made by dispatch or an admin). A
+    // volunteer who accepted a request on their own has none of the three.
+    offeredAt: { type: Date },
+    offerExpiresAt: { type: Date },
+    offerSource: { type: String, enum: OFFER_SOURCE_VALUES },
   },
   { timestamps: true, versionKey: false },
 )
@@ -25,6 +32,10 @@ const taskSchema = new Schema(
 taskSchema.index({ sosRequest: 1, volunteer: 1 }, { unique: true })
 taskSchema.index({ volunteer: 1, status: 1, createdAt: -1 })
 taskSchema.index({ sosRequest: 1 })
+// The expiry job: pending offers whose time is up.
+taskSchema.index({ status: 1, offerExpiresAt: 1 })
+// The set-off check: accepted tasks, oldest first.
+taskSchema.index({ status: 1, acceptedAt: 1 })
 
 export const Task = model('Task', taskSchema)
 

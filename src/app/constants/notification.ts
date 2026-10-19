@@ -36,6 +36,9 @@ export const NotificationType = {
   VOLUNTEER_REQUEST_APPROVED: 'volunteer_request_approved',
   VOLUNTEER_REQUEST_REJECTED: 'volunteer_request_rejected',
   INVENTORY_LOW: 'inventory_low',
+  TASK_OFFERED: 'task_offered',
+  OFFER_EXPIRED: 'offer_expired',
+  SOS_UNSERVED: 'sos_unserved',
 } as const
 
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType]
@@ -109,6 +112,24 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
     category: NotificationCategory.CAMPS,
     emailable: true,
     mandatory: false,
+  },
+  // An offer is time-limited, so it cannot be switched off; email is not sent for it (the bell and the
+  // task list are where volunteers answer).
+  [NotificationType.TASK_OFFERED]: {
+    category: NotificationCategory.TASKS,
+    emailable: false,
+    mandatory: true,
+  },
+  [NotificationType.OFFER_EXPIRED]: {
+    category: NotificationCategory.TASKS,
+    emailable: false,
+    mandatory: false,
+  },
+  // To admins and NGOs: nobody could be found for a request. Mandatory, not emailed.
+  [NotificationType.SOS_UNSERVED]: {
+    category: NotificationCategory.SAFETY,
+    emailable: false,
+    mandatory: true,
   },
 }
 

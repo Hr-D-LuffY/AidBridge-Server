@@ -1,5 +1,5 @@
 import httpStatus from 'http-status'
-import type { ClientSession, QueryFilter } from 'mongoose'
+import type { ClientSession, QueryFilter, Types } from 'mongoose'
 import { AuditAction, AuditTargetType } from '../../constants/audit'
 import {
   ALL_ROLES_TARGET,
@@ -7,9 +7,11 @@ import {
   NotificationType,
 } from '../../constants/notification'
 import { Role } from '../../constants/role'
+import type { Skill } from '../../constants/skill'
 import { BLOCKED_CLOSE_REASON } from '../../constants/user'
 import { AppError } from '../../errorHelpers/AppError'
 import { isOnDuty } from '../../lib/availability'
+import { geoNearStage, type NearbyQuery } from '../../lib/geo'
 import { runInTransaction } from '../../lib/transaction'
 import { type DateRange, inRange } from '../../utils/dateRange'
 import type { TokenPayload } from '../../utils/jwt'
@@ -332,11 +334,74 @@ const updateNotificationPreferences = async (id: string, changes: PreferencesCha
 
 const countActiveVolunteers = () => User.countDocuments({ role: Role.VOLUNTEER, isDeleted: false })
 
+// --- Dispatch (commit 15) ----------------------------------------------------------------------
+
+const DISPATCH_DISTANCE_FIELD = 'distanceMetersFromRequest'
+
+export interface DispatchCandidateRow {
+  _id: Types.ObjectId
+  distanceMeters: number
+  reliabilityScore: number
+  skills?: Skill[]
+  noShowCount?: number
+  isAvailable: boolean
+  onDutyUntil?: Date | null
+}
+
+// Volunteers around a point, nearest first, who could be offered a request: active, not blocked,
+// available, not in `excludeIds`. "On duty" is decided by the caller with `isOnDuty`, the one place
+// that rule lives; `isAvailable` here only trims the list the database has to return.
+const findDispatchCandidates = (nearby: NearbyQuery, excludeIds: Types.ObjectId[], limit: number) =>
+  User.aggregate<DispatchCandidateRow>([
+    geoNearStage(
+      nearby,
+      {
+        role: Role.VOLUNTEER,
+        isDeleted: false,
+        isBlocked: { $ne: true },
+        isAvailable: true,
+        _id: { $nin: excludeIds },
+      },
+      DISPATCH_DISTANCE_FIELD,
+    ),
+    { $limit: limit },
+    {
+      $project: {
+        distanceMeters: `$${DISPATCH_DISTANCE_FIELD}`,
+        reliabilityScore: 1,
+        skills: 1,
+        noShowCount: 1,
+        isAvailable: 1,
+        onDutyUntil: 1,
+      },
+    },
+  ])
+
+// Admins and NGOs who can be told something needs a human (a request nobody could take).
+const listStaffIds = async () => {
+  const staff = await User.find({
+    role: { $in: [Role.ADMIN, Role.NGO] },
+    isDeleted: false,
+    isBlocked: { $ne: true },
+  })
+    .select('_id')
+    .lean()
+  return staff.map((user) => String(user._id))
+}
+
+// One more offer left unanswered, or accepted and never set off for.
+const incrementNoShow = async (volunteerId: string) => {
+  await User.updateOne({ _id: volunteerId }, { $inc: { noShowCount: 1 } })
+}
+
 // Accounts created within the range (everyone when no range is given), deleted ones excluded.
 const countRegistered = (range: DateRange) =>
   User.countDocuments({ isDeleted: false, ...inRange('createdAt', range) })
 
 export const UserService = {
+  findDispatchCandidates,
+  listStaffIds,
+  incrementNoShow,
   getNotificationTargets,
   getNotificationPreferences,
   updateNotificationPreferences,

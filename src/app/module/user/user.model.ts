@@ -57,6 +57,9 @@ const userSchema = new Schema(
     // is stored so the average is recomputed exactly each time instead of drifting through rounding.
     totalRatings: { type: Number, default: 0, min: 0 },
     ratingSum: { type: Number, default: 0, min: 0 },
+    // Offers left unanswered plus accepted requests never set off for. Dispatch ranks a volunteer lower
+    // for it. Kept apart from reliabilityScore on purpose: that one is an exact average of ratings.
+    noShowCount: { type: Number, default: 0, min: 0 },
     // Tokens issued before this moment are rejected by auth().
     passwordChangedAt: { type: Date },
     // Hashed reset token + expiry, set by forgot-password and cleared by reset-password.

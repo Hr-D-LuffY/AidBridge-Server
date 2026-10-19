@@ -4,6 +4,7 @@ import { getAuthUser } from '../../utils/getAuthUser'
 import { normalizeQuery } from '../../utils/queryList'
 import { sendResponse } from '../../utils/sendResponse'
 import { idParamSchema } from '../../utils/validation'
+import { timelineQuerySchema } from '../sos-event/sos-event.interface'
 import {
   createSosSchema,
   listSosQuerySchema,
@@ -57,6 +58,19 @@ const getSosById = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     message: 'SOS request retrieved successfully',
     data: sos,
+  })
+})
+
+const getTimeline = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const query = timelineQuerySchema.parse(req.query)
+  const { items, meta } = await SosService.getTimeline(getAuthUser(req), id, query)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'SOS timeline retrieved successfully',
+    data: items,
+    meta,
   })
 })
 
@@ -136,6 +150,7 @@ export const SosController = {
   listSos,
   listNearby,
   getSosById,
+  getTimeline,
   updateSos,
   addMedia,
   resolveSos,
