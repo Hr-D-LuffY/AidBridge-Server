@@ -22,7 +22,24 @@ export const SOS_TRANSITIONS: Record<SosStatus, readonly SosStatus[]> = {
 // Statuses in which the victim can no longer edit the request or add media / messages.
 export const SOS_FINISHED_STATUSES: readonly SosStatus[] = [SosStatus.RESCUED, SosStatus.CLOSED]
 
-// Who closed a request. Only the victim can today; `admin` is reserved for staff-closed requests.
+// Why the victim resolved a request. Anything but `other` needs no typed reason: the server writes a
+// preset one. The rating prompt never looks at this, only at whether a volunteer completed a task.
+export const ResolveKind = {
+  SAFE: 'safe',
+  RESCUED_ELSEWHERE: 'rescued_elsewhere',
+  NO_LONGER_NEEDED: 'no_longer_needed',
+  OTHER: 'other',
+} as const
+
+export type ResolveKind = (typeof ResolveKind)[keyof typeof ResolveKind]
+
+export const RESOLVE_KIND_PRESET_REASONS: Record<Exclude<ResolveKind, 'other'>, string> = {
+  [ResolveKind.SAFE]: 'I am safe now',
+  [ResolveKind.RESCUED_ELSEWHERE]: 'I was helped by someone else',
+  [ResolveKind.NO_LONGER_NEEDED]: 'I no longer need help',
+}
+
+// Who closed a request: the victim, or an admin (closing it by hand, or blocking the victim).
 export const ResolvedBy = {
   VICTIM: 'victim',
   ADMIN: 'admin',

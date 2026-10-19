@@ -7,6 +7,7 @@ import {
   MAX_SOS_RESOLVE_REASON_LENGTH,
   MediaType,
   ResolvedBy,
+  ResolveKind,
   SosStatus,
 } from '../../constants/sos'
 import { Priority, ReliefCategory } from '../../constants/relief'
@@ -18,6 +19,7 @@ const PRIORITY_VALUES: Priority[] = Object.values(Priority)
 const STATUS_VALUES: SosStatus[] = Object.values(SosStatus)
 const RESOLVED_BY_VALUES: ResolvedBy[] = Object.values(ResolvedBy)
 const SKILL_VALUES: Skill[] = Object.values(Skill)
+const RESOLVE_KIND_VALUES: ResolveKind[] = Object.values(ResolveKind)
 const MEDIA_TYPE_VALUES: MediaType[] = Object.values(MediaType)
 
 // One uploaded photo or video. `publicId` is what Cloudinary needs to delete the file; it is never
@@ -60,6 +62,8 @@ const sosSchema = new Schema(
     resolvedAt: { type: Date },
     resolvedBy: { type: String, enum: RESOLVED_BY_VALUES },
     resolveReason: { type: String, trim: true, maxlength: MAX_SOS_RESOLVE_REASON_LENGTH },
+    // Why the victim resolved it. Absent on requests closed before this existed and on ones an admin closed.
+    resolveKind: { type: String, enum: RESOLVE_KIND_VALUES },
     // The dispatch engine's bookkeeping (see module/dispatch). Requests that existed before it have none
     // of this; readers fall back to the defaults and the engine fills `nextActionAt` in.
     dispatch: {

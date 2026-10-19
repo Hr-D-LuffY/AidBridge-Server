@@ -1,4 +1,7 @@
 // Top volunteers shown in the dashboard, and top handed-out items.
+// Closed requests with no `resolveKind` because an admin closed them (analytics groups them under this).
+export const ADMIN_CLOSED_KIND = 'admin_closed'
+
 export const TOP_VOLUNTEERS_LIMIT = 10
 export const TOP_DISTRIBUTED_ITEMS_LIMIT = 20
 

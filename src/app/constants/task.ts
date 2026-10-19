@@ -49,6 +49,7 @@ export const MAX_ACTIVE_TASKS_PER_VOLUNTEER = 3
 export const MAX_TASK_NOTES_LENGTH = 500
 
 export const OFFER_TAKEN_NOTE = 'Another volunteer took this request'
+export const ADMIN_CLOSED_NOTE_PREFIX = 'SOS closed by an admin before completion. Reason: '
 
 // Task statuses a volunteer may set with PUT /tasks/:id/status, and what each does to the SOS
 // request. `from` is the SOS status it must be in, `to` the one it moves to.

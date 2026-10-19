@@ -85,6 +85,7 @@ export const SosEventType = {
   UNSERVED: 'unserved',
   SET_OFF_TIMEOUT: 'set_off_timeout',
   BACKED_OUT: 'backed_out',
+  CLOSED: 'closed',
   UNASSIGNED: 'unassigned',
   PAUSED: 'paused',
   RESUMED: 'resumed',

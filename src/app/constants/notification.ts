@@ -40,6 +40,7 @@ export const NotificationType = {
   OFFER_EXPIRED: 'offer_expired',
   SOS_UNSERVED: 'sos_unserved',
   TASK_ASSIGNED: 'task_assigned',
+  SOS_CLOSED_BY_ADMIN: 'sos_closed_by_admin',
 } as const
 
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType]
@@ -130,6 +131,12 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   [NotificationType.TASK_ASSIGNED]: {
     category: NotificationCategory.TASKS,
     emailable: false,
+    mandatory: true,
+  },
+  // An admin closed the request (to the victim, and to the volunteers who had it or an offer for it).
+  [NotificationType.SOS_CLOSED_BY_ADMIN]: {
+    category: NotificationCategory.SAFETY,
+    emailable: true,
     mandatory: true,
   },
   // To admins and NGOs: nobody could be found for a request. Mandatory, not emailed.

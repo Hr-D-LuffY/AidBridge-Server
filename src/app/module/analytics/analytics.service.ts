@@ -1,11 +1,12 @@
 import {
+  ADMIN_CLOSED_KIND,
   LIVE_MAP_MAX_CAMPS,
   LIVE_MAP_MAX_REQUESTS,
   TOP_DISTRIBUTED_ITEMS_LIMIT,
   TOP_VOLUNTEERS_LIMIT,
 } from '../../constants/analytics'
 import { Priority } from '../../constants/relief'
-import { SosStatus } from '../../constants/sos'
+import { ResolveKind, SosStatus } from '../../constants/sos'
 import type { DateRange } from '../../utils/dateRange'
 import { CampService } from '../camp/camp.service'
 import { DistributionService } from '../distribution/distribution.service'
@@ -56,6 +57,10 @@ const getDashboard = async (range: DateRange) => {
     },
     requestsByStatus: withAllKeys(Object.values(SosStatus), counts.byStatus),
     requestsByPriority: withAllKeys(Object.values(Priority), counts.byPriority),
+    requestsByResolveKind: withAllKeys(
+      [...Object.values(ResolveKind), ADMIN_CLOSED_KIND],
+      counts.byResolveKind,
+    ),
     avgResponseTime,
     volunteerActivity,
     distributionByItem,

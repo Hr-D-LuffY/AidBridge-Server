@@ -7,6 +7,7 @@ import {
   MAX_SOS_RESOLVE_REASON_LENGTH,
   MAX_SOS_SEARCH_LENGTH,
   MIN_SOS_SEARCH_LENGTH,
+  ResolveKind,
   SosSort,
   SosStatus,
 } from '../../constants/sos'
@@ -79,16 +80,33 @@ export const updateSosSchema = updateBodySchema(
   'Priority and status are not editable here',
 ).refine(...atLeastOneField)
 
-export const resolveSosSchema = z.strictObject({
-  resolveReason: z
-    .string()
-    .trim()
-    .min(1, 'A resolve reason is required')
-    .max(
-      MAX_SOS_RESOLVE_REASON_LENGTH,
-      `Reason must be at most ${MAX_SOS_RESOLVE_REASON_LENGTH} characters`,
-    ),
-})
+const resolveReasonSchema = z
+  .string()
+  .trim()
+  .min(1, 'A resolve reason is required')
+  .max(
+    MAX_SOS_RESOLVE_REASON_LENGTH,
+    `Reason must be at most ${MAX_SOS_RESOLVE_REASON_LENGTH} characters`,
+  )
+
+// `kind` says why. Any kind but `other` needs no typed reason (the server fills in a preset one, so
+// "I'm safe" is one tap); `other` still has to explain itself, which keeps the old body working.
+export const resolveSosSchema = z
+  .strictObject({
+    kind: z
+      .enum(ResolveKind, {
+        error: `Kind must be one of: ${Object.values(ResolveKind).join(', ')}`,
+      })
+      .default(ResolveKind.OTHER),
+    resolveReason: resolveReasonSchema.optional(),
+  })
+  .refine((body) => body.kind !== ResolveKind.OTHER || body.resolveReason !== undefined, {
+    message: 'A resolve reason is required',
+    path: ['resolveReason'],
+  })
+
+// An admin closing a request by hand always says why: the victim and the volunteers are shown it.
+export const closeSosSchema = z.strictObject({ reason: resolveReasonSchema })
 
 export const setPrioritySchema = z.strictObject({ priority: prioritySchema })
 
@@ -146,6 +164,7 @@ export const nearbySosQuerySchema = z.object({
 export type CreateSosPayload = z.infer<typeof createSosSchema>
 export type UpdateSosPayload = z.infer<typeof updateSosSchema>
 export type ResolveSosPayload = z.infer<typeof resolveSosSchema>
+export type CloseSosPayload = z.infer<typeof closeSosSchema>
 export type SetPriorityPayload = z.infer<typeof setPrioritySchema>
 export type ListSosQuery = z.infer<typeof listSosQuerySchema>
 export type NearbySosQuery = z.infer<typeof nearbySosQuerySchema>

@@ -3,6 +3,7 @@ import type { ClientSession, QueryFilter, Types } from 'mongoose'
 import { type OfferSource, SosEventType } from '../../constants/dispatch'
 import {
   MAX_ACTIVE_TASKS_PER_VOLUNTEER,
+  MAX_TASK_NOTES_LENGTH,
   OFFER_TAKEN_NOTE,
   RespondAction,
   TASK_ACTIVE_STATUSES,
@@ -224,12 +225,22 @@ const withdrawAccepted = async (
 
 // The victim resolved the request: every unfinished task on it ends as cancelled. Answers who held
 // them (the volunteer who accepted, and everyone with an open offer) so the caller can tell them.
-const cancelOpenTasks = async (session: ClientSession, sosId: string, reason: string) => {
+const cancelOpenTasks = async (
+  session: ClientSession,
+  sosId: string,
+  reason: string,
+  notePrefix = CANCELLED_NOTE_PREFIX,
+) => {
   const filter = { sosRequest: sosId, status: { $in: [...TASK_OPEN_STATUSES] } }
   const open = await Task.find(filter).select('volunteer').session(session).lean()
   await Task.updateMany(
     filter,
-    { $set: { status: TaskStatus.CANCELLED, notes: `${CANCELLED_NOTE_PREFIX}"${reason}"` } },
+    {
+      $set: {
+        status: TaskStatus.CANCELLED,
+        notes: `${notePrefix}"${reason}"`.slice(0, MAX_TASK_NOTES_LENGTH),
+      },
+    },
     { session },
   )
   return open.map((task) => String(task.volunteer))

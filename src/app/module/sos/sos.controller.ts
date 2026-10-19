@@ -6,6 +6,7 @@ import { sendResponse } from '../../utils/sendResponse'
 import { idParamSchema } from '../../utils/validation'
 import { timelineQuerySchema } from '../sos-event/sos-event.interface'
 import {
+  closeSosSchema,
   createSosSchema,
   listSosQuerySchema,
   nearbySosQuerySchema,
@@ -111,6 +112,18 @@ const resolveSos = catchAsync(async (req, res) => {
   })
 })
 
+const closeSos = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const payload = closeSosSchema.parse(req.body)
+  const sos = await SosService.closeSos(getAuthUser(req), id, payload)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'SOS request closed successfully',
+    data: sos,
+  })
+})
+
 const acceptSos = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const result = await SosService.acceptSos(getAuthUser(req).id, id)
@@ -154,6 +167,7 @@ export const SosController = {
   updateSos,
   addMedia,
   resolveSos,
+  closeSos,
   setPriority,
   acceptSos,
   rejectSos,

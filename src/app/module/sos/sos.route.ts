@@ -24,6 +24,7 @@ router.put('/:id/accept', auth(Role.VOLUNTEER), SosController.acceptSos)
 router.put('/:id/reject', auth(Role.VOLUNTEER), SosController.rejectSos)
 router.put('/:id/priority', auth(Role.ADMIN), SosController.setPriority)
 router.put('/:id/resolve', auth(Role.VICTIM), SosController.resolveSos)
+router.put('/:id/close', auth(Role.ADMIN), SosController.closeSos)
 
 router.get('/:id/timeline', auth(), SosController.getTimeline)
 

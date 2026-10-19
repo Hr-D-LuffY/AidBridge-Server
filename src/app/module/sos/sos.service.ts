@@ -1,5 +1,6 @@
 import httpStatus from 'http-status'
 import { type ClientSession, type QueryFilter, Types } from 'mongoose'
+import { ADMIN_CLOSED_KIND } from '../../constants/analytics'
 import { AuditAction, AuditTargetType } from '../../constants/audit'
 import { SosEventType } from '../../constants/dispatch'
 import { NotificationType } from '../../constants/notification'
@@ -7,7 +8,9 @@ import { Role } from '../../constants/role'
 import {
   MAX_ACTIVE_SOS_PER_VICTIM,
   MAX_SOS_MEDIA_ITEMS,
+  RESOLVE_KIND_PRESET_REASONS,
   ResolvedBy,
+  ResolveKind,
   SOS_FINISHED_STATUSES,
   SOS_MEDIA_FOLDER,
   SOS_MEDIA_FORMATS,
@@ -16,7 +19,7 @@ import {
   SosStatus,
 } from '../../constants/sos'
 import type { Skill } from '../../constants/skill'
-import { type TaskProgressStatus, TaskStatus } from '../../constants/task'
+import { ADMIN_CLOSED_NOTE_PREFIX, type TaskProgressStatus, TaskStatus } from '../../constants/task'
 import { PRIORITY_ORDER, type Priority, type ReliefCategory } from '../../constants/relief'
 import { AppError } from '../../errorHelpers/AppError'
 import {
@@ -40,6 +43,7 @@ import { SosEventService } from '../sos-event/sos-event.service'
 import { TaskService } from '../task/task.service'
 import { User } from '../user/user.model'
 import type {
+  CloseSosPayload,
   CreateSosPayload,
   ListSosQuery,
   NearbySosQuery,
@@ -100,6 +104,7 @@ const toFullView = (sos: SosRecord) => ({
   resolvedAt: sos.resolvedAt ?? null,
   resolvedBy: sos.resolvedBy ?? null,
   resolveReason: sos.resolveReason ?? null,
+  resolveKind: sos.resolveKind ?? null,
   createdAt: sos.createdAt,
   updatedAt: sos.updatedAt,
 })
@@ -477,6 +482,13 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
   const existing = await loadOwnedOpenRequest(id, victimId)
   assertTransition(SOS_TRANSITIONS, existing.status, SosStatus.CLOSED, 'SOS request')
 
+  // A kind other than `other` may come with no words of its own: the preset text stands in.
+  const { kind } = payload
+  const reason =
+    payload.resolveReason ??
+    (kind === ResolveKind.OTHER ? undefined : RESOLVE_KIND_PRESET_REASONS[kind]) ??
+    kind
+
   // The request closes and every unfinished task on it is cancelled, or neither happens.
   const heldBy = await runInTransaction(async (session) => {
     const closed = await SosRequest.findOneAndUpdate(
@@ -485,14 +497,21 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
         $set: {
           status: SosStatus.CLOSED,
           resolvedBy: ResolvedBy.VICTIM,
-          resolveReason: payload.resolveReason,
+          resolveReason: reason,
+          resolveKind: kind,
           resolvedAt: new Date(),
         },
       },
       { runValidators: true, session },
     )
     if (!closed) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
-    return TaskService.cancelOpenTasks(session, id, payload.resolveReason)
+    return TaskService.cancelOpenTasks(session, id, reason)
+  })
+  await SosEventService.record({
+    sos: id,
+    type: SosEventType.CLOSED,
+    actorId: victimId,
+    meta: { kind },
   })
 
   const assignedId = existing.assignedVolunteer ? String(existing.assignedVolunteer) : null
@@ -501,7 +520,7 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
       userIds: [assignedId],
       type: NotificationType.TASK_CANCELLED,
       title: 'SOS request closed',
-      message: `The victim closed an SOS request you were working on: ${payload.resolveReason}`,
+      message: `The victim closed an SOS request you were working on: ${reason}`,
       sosRequestId: id,
     })
   }
@@ -516,6 +535,73 @@ const resolveSos = async (victimId: string, id: string, payload: ResolveSosPaylo
   })
 
   return getFullView(id)
+}
+
+// An admin closes a request by hand (a scam, a duplicate they handled, something found out by phone). It
+// can be in any state but already closed, `rescued` included. Every unfinished task is cancelled with it,
+// and the victim and every volunteer who held it or an offer for it are told why. A rescue that was
+// already completed keeps its completed task, so the victim can still rate it.
+const closeSos = async (admin: TokenPayload, id: string, payload: CloseSosPayload) => {
+  const { reason } = payload
+  const existing = await SosRequest.findById(id)
+    .select('status victim assignedVolunteer resolvedAt')
+    .lean()
+  if (!existing) throw new AppError(httpStatus.NOT_FOUND, NOT_FOUND_MESSAGE)
+  if (existing.status === SosStatus.CLOSED) {
+    throw new AppError(httpStatus.CONFLICT, 'This SOS request is already closed')
+  }
+  assertTransition(SOS_TRANSITIONS, existing.status, SosStatus.CLOSED, 'SOS request')
+
+  const heldBy = await runInTransaction(async (session) => {
+    const closed = await SosRequest.findOneAndUpdate(
+      { _id: id, status: existing.status },
+      {
+        $set: {
+          status: SosStatus.CLOSED,
+          resolvedBy: ResolvedBy.ADMIN,
+          resolveReason: reason,
+          // A rescued request keeps the time it was rescued.
+          resolvedAt: existing.resolvedAt ?? new Date(),
+        },
+        $unset: { resolveKind: '' },
+      },
+      { runValidators: true, session },
+    )
+    if (!closed) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+    return TaskService.cancelOpenTasks(session, id, reason, ADMIN_CLOSED_NOTE_PREFIX)
+  })
+
+  await SosEventService.record({
+    sos: id,
+    type: SosEventType.CLOSED,
+    actorId: admin.id,
+    meta: { by: 'admin' },
+  })
+  await NotificationService.notifyUsers({
+    userIds: [String(existing.victim)],
+    type: NotificationType.SOS_CLOSED_BY_ADMIN,
+    title: 'An admin closed your SOS request',
+    message: `An admin closed your SOS request: ${reason}. If you still need help, please raise a new request.`,
+    sosRequestId: id,
+  })
+  const assignedId = existing.assignedVolunteer ? String(existing.assignedVolunteer) : null
+  await NotificationService.notifyUsers({
+    userIds: [...new Set([...(assignedId ? [assignedId] : []), ...heldBy])],
+    type: NotificationType.SOS_CLOSED_BY_ADMIN,
+    title: 'An admin closed an SOS request',
+    message: `An admin closed an SOS request you were working on or were offered: ${reason}. You do not need to respond.`,
+    sosRequestId: id,
+  })
+  await AuditService.record({
+    actor: admin,
+    action: AuditAction.SOS_CLOSED,
+    targetType: AuditTargetType.SOS_REQUEST,
+    targetId: id,
+    // The reason is on the request itself; it may hold names or numbers, which never go in the audit log.
+    summary: `Closed an SOS request that was ${existing.status}`,
+    meta: { from: existing.status, volunteersTold: heldBy.length },
+  })
+  return getStaffView(id)
 }
 
 // An admin blocked the victim: every request of theirs that is not finished is closed (as an admin
@@ -1097,16 +1183,43 @@ const countByStatusAndPriority = async (range: DateRange) => {
   const [result] = await SosRequest.aggregate<{
     byStatus: CountRow<SosStatus>[]
     byPriority: CountRow<Priority>[]
+    byResolveKind: CountRow<string>[]
   }>([
     { $match: inRange('createdAt', range) },
     {
       $facet: {
         byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
         byPriority: [{ $group: { _id: '$priority', count: { $sum: 1 } } }],
+        // Closed requests by why. One an admin closed has no kind of its own; an older one the victim
+        // resolved before kinds existed counts as `other`.
+        byResolveKind: [
+          { $match: { status: SosStatus.CLOSED } },
+          {
+            $group: {
+              _id: {
+                $ifNull: [
+                  '$resolveKind',
+                  {
+                    $cond: [
+                      { $eq: ['$resolvedBy', ResolvedBy.ADMIN] },
+                      ADMIN_CLOSED_KIND,
+                      ResolveKind.OTHER,
+                    ],
+                  },
+                ],
+              },
+              count: { $sum: 1 },
+            },
+          },
+        ],
       },
     },
   ])
-  return { byStatus: result?.byStatus ?? [], byPriority: result?.byPriority ?? [] }
+  return {
+    byStatus: result?.byStatus ?? [],
+    byPriority: result?.byPriority ?? [],
+    byResolveKind: result?.byResolveKind ?? [],
+  }
 }
 
 // Requests still open (not rescued / closed) for the live map, newest first. Names only, no
@@ -1150,6 +1263,7 @@ export const SosService = {
   updateSos,
   addMedia,
   resolveSos,
+  closeSos,
   closeUnfinishedForVictim,
   setPriority,
   acceptSos,
