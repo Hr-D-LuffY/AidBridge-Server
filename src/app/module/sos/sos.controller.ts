@@ -9,11 +9,13 @@ import {
   closeSosSchema,
   createSosSchema,
   listSosQuerySchema,
+  mergeSosSchema,
   nearbySosQuerySchema,
   resolveSosSchema,
   setPrioritySchema,
   updateSosSchema,
 } from './sos.interface'
+import { DuplicateService } from './duplicate.service'
 import { SosService } from './sos.service'
 
 const createSos = catchAsync(async (req, res) => {
@@ -100,6 +102,40 @@ const addMedia = catchAsync(async (req, res) => {
   })
 })
 
+const getDuplicates = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const items = await DuplicateService.listFor(id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Possible duplicates retrieved successfully',
+    data: items,
+  })
+})
+
+const mergeSos = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const payload = mergeSosSchema.parse(req.body)
+  const result = await DuplicateService.merge(getAuthUser(req), id, payload)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'SOS request merged successfully',
+    data: result,
+  })
+})
+
+const dismissDuplicates = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const sos = await DuplicateService.dismiss(getAuthUser(req), id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Duplicate flag dismissed successfully',
+    data: sos,
+  })
+})
+
 const resolveSos = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const payload = resolveSosSchema.parse(req.body)
@@ -180,6 +216,9 @@ export const SosController = {
   resolveSos,
   closeSos,
   confirmSos,
+  getDuplicates,
+  mergeSos,
+  dismissDuplicates,
   setPriority,
   acceptSos,
   rejectSos,

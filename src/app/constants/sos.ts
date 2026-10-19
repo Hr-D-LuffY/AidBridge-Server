@@ -31,6 +31,8 @@ export const ResolveKind = {
   OTHER: 'other',
   // Never chosen by a person: the system closed a medium or low request nobody answered for (commit 23).
   STALE: 'stale',
+  // Never chosen by a victim: an admin combined this request into another one (commit 25).
+  MERGED: 'merged',
 } as const
 
 export type ResolveKind = (typeof ResolveKind)[keyof typeof ResolveKind]
@@ -50,6 +52,15 @@ export const RESOLVE_KIND_PRESET_REASONS: Record<Exclude<VictimResolveKind, 'oth
   [ResolveKind.RESCUED_ELSEWHERE]: 'I was helped by someone else',
   [ResolveKind.NO_LONGER_NEEDED]: 'I no longer need help',
 }
+
+// Duplicate detection (commit 25): a new request is flagged against open requests from other victims this
+// close and this recent. The flag only helps an admin look; nothing is ever blocked, delayed or ranked by it.
+export const DUPLICATE_RADIUS_METERS = 150
+export const DUPLICATE_WINDOW_MINUTES = 180
+// Most links one request keeps, nearest first, so a crowd cannot grow the list without bound.
+export const MAX_DUPLICATE_LINKS = 10
+// A volunteer with an offer is told how far the other requests are, rounded up to this many metres.
+export const DUPLICATE_DISTANCE_STEP_METERS = 50
 
 export const STALE_CLOSE_REASON =
   'Closed automatically: there was no answer to the "Do you still need help?" check'

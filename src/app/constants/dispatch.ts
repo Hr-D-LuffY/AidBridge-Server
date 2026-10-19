@@ -122,6 +122,9 @@ export const SosEventType = {
   RESUMED: 'resumed',
   ON_THE_WAY: 'on_the_way',
   COMPLETED: 'completed',
+  // An admin combined this request into another one / another one into this request (commit 25).
+  MERGED: 'merged',
+  MERGED_IN: 'merged_in',
 } as const
 
 export type SosEventType = (typeof SosEventType)[keyof typeof SosEventType]

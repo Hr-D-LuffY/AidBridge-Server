@@ -45,6 +45,7 @@ export const NotificationType = {
   SOS_CLOSED_STALE: 'sos_closed_stale',
   SOS_STALE_UNANSWERED: 'sos_stale_unanswered',
   TASK_COMPLETED_BY_ADMIN: 'task_completed_by_admin',
+  SOS_MERGED: 'sos_merged',
 } as const
 
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType]
@@ -160,6 +161,12 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   [NotificationType.SOS_STALE_UNANSWERED]: {
     category: NotificationCategory.SAFETY,
     emailable: false,
+    mandatory: true,
+  },
+  // To the victim whose request an admin combined into another one. Mandatory: their request just closed.
+  [NotificationType.SOS_MERGED]: {
+    category: NotificationCategory.SAFETY,
+    emailable: true,
     mandatory: true,
   },
   // To the volunteer: an admin completed their task without the arrival code or a photo. Mandatory, so the

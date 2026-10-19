@@ -109,6 +109,13 @@ export const resolveSosSchema = z
 // An admin closing a request by hand always says why: the victim and the volunteers are shown it.
 export const closeSosSchema = z.strictObject({ reason: resolveReasonSchema })
 
+// `:id` in the route is the duplicate that closes; `intoId` is the request that carries on. The reason is
+// kept on the closed request and shown to its victim's staff, so it is always given.
+export const mergeSosSchema = z.strictObject({
+  intoId: objectIdSchema,
+  reason: resolveReasonSchema,
+})
+
 export const setPrioritySchema = z.strictObject({ priority: prioritySchema })
 
 const statusSchema = z.enum(SosStatus, {
@@ -148,6 +155,11 @@ export const listSosQuerySchema = z
       .enum(['true', 'false'], { error: 'unserved must be true or false' })
       .optional()
       .transform((value) => (value === undefined ? undefined : value === 'true')),
+    // `true`: open requests flagged as a possible duplicate of another; `false`: those that are not flagged.
+    possibleDuplicate: z
+      .enum(['true', 'false'], { error: 'possibleDuplicate must be true or false' })
+      .optional()
+      .transform((value) => (value === undefined ? undefined : value === 'true')),
   })
   .refine((query) => !query.from || !query.to || query.from <= query.to, {
     message: '"from" must not be after "to"',
@@ -166,6 +178,7 @@ export type CreateSosPayload = z.infer<typeof createSosSchema>
 export type UpdateSosPayload = z.infer<typeof updateSosSchema>
 export type ResolveSosPayload = z.infer<typeof resolveSosSchema>
 export type CloseSosPayload = z.infer<typeof closeSosSchema>
+export type MergeSosPayload = z.infer<typeof mergeSosSchema>
 export type SetPriorityPayload = z.infer<typeof setPrioritySchema>
 export type ListSosQuery = z.infer<typeof listSosQuerySchema>
 export type NearbySosQuery = z.infer<typeof nearbySosQuerySchema>

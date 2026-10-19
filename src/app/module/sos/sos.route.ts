@@ -29,6 +29,11 @@ router.put('/:id/confirm', auth(Role.VICTIM), SosController.confirmSos)
 
 router.get('/:id/timeline', auth(), SosController.getTimeline)
 
+// Possible duplicates (commit 25): an admin compares, combines or dismisses.
+router.get('/:id/duplicates', auth(Role.ADMIN), SosController.getDuplicates)
+router.put('/:id/duplicates/dismiss', auth(Role.ADMIN), SosController.dismissDuplicates)
+router.put('/:id/merge', auth(Role.ADMIN), SosController.mergeSos)
+
 router.put('/:id', auth(Role.VICTIM), SosController.updateSos)
 router.get('/:id', auth(), SosController.getSosById)
 

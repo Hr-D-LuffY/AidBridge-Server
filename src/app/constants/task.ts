@@ -54,6 +54,7 @@ export const OFFER_TAKEN_NOTE = 'Another volunteer took this request'
 export const STALE_CLOSED_NOTE_PREFIX =
   'SOS closed automatically (no answer to the check-in) before completion. Reason: '
 export const ADMIN_CLOSED_NOTE_PREFIX = 'SOS closed by an admin before completion. Reason: '
+export const MERGED_NOTE_PREFIX = 'SOS combined with another request before completion. Reason: '
 
 // Task statuses a volunteer may set with PUT /tasks/:id/status, and what each does to the SOS
 // request. `from` is the SOS status it must be in, `to` the one it moves to.

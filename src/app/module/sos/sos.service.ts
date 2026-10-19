@@ -43,6 +43,7 @@ import { buildMeta, getPagination } from '../../utils/pagination'
 import { type DateRange, inRange } from '../../utils/dateRange'
 import { assertTransition } from '../../utils/transitions'
 import { AuditService } from '../audit/audit.service'
+import { DuplicateService } from './duplicate.service'
 import { Incident } from '../incident/incident.model'
 import { NotificationService } from '../notification/notification.service'
 import type { TimelineQuery } from '../sos-event/sos-event.interface'
@@ -141,6 +142,10 @@ const toDispatchView = (dispatch?: DispatchFields | null) => ({
 const toStaffView = (sos: SosRecord) => ({
   ...toFullView(sos),
   dispatch: toDispatchView(sos.dispatch),
+  // Other requests that may be the same emergency (an admin compares them), and, once an admin combined
+  // this one into another, which one.
+  possibleDuplicateOf: (sos.possibleDuplicateOf ?? []).map(String),
+  mergedInto: sos.mergedInto ? String(sos.mergedInto) : null,
 })
 
 interface LimitedSource {
@@ -224,6 +229,9 @@ const createSos = async (victimId: string, payload: CreateSosPayload) => {
     address,
   })
 
+  // A hint for admins only; it cannot fail or hold up the victim's request.
+  await DuplicateService.detectFor(created)
+
   const sos = await findPopulated({ _id: created._id })
   if (!sos) throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'SOS request was not saved')
   return toFullView(sos)
@@ -236,13 +244,31 @@ const toObjectId = (id: string) => new Types.ObjectId(id)
 // Admins and NGOs see every request, and alone may filter by incident, volunteer or victim. Everyone
 // else sees the ones they raised or were assigned.
 const buildListFilter = async (viewer: TokenPayload, query: ListSosQuery) => {
-  const { status, priority, needs, q, from, to, incidentId, volunteerId, victimId, unserved } =
-    query
+  const {
+    status,
+    priority,
+    needs,
+    q,
+    from,
+    to,
+    incidentId,
+    volunteerId,
+    victimId,
+    unserved,
+    possibleDuplicate,
+  } = query
   const isStaff = viewer.role === Role.ADMIN || viewer.role === Role.NGO
-  if (!isStaff && (incidentId || volunteerId || victimId || unserved !== undefined)) {
+  if (
+    !isStaff &&
+    (incidentId ||
+      volunteerId ||
+      victimId ||
+      unserved !== undefined ||
+      possibleDuplicate !== undefined)
+  ) {
     throw new AppError(
       httpStatus.FORBIDDEN,
-      'Only an admin or an NGO can filter by incident, volunteer, victim or unserved',
+      'Only an admin or an NGO can filter by incident, volunteer, victim, unserved or possibleDuplicate',
     )
   }
 
@@ -257,6 +283,11 @@ const buildListFilter = async (viewer: TokenPayload, query: ListSosQuery) => {
   if (victimId) filter.victim = toObjectId(victimId)
   // A request from before dispatch existed has no flag, so "not unserved" is "not true", not "false".
   if (unserved !== undefined) filter['dispatch.unserved'] = unserved ? true : { $ne: true }
+  // Flagged and still open: a flag on a finished request is no longer something to review. `false` is "not flagged".
+  if (possibleDuplicate !== undefined) {
+    filter['possibleDuplicateOf.0'] = { $exists: possibleDuplicate }
+    if (possibleDuplicate && !status) filter.status = { $nin: [...SOS_FINISHED_STATUSES] }
+  }
   // The user's words go to MongoDB's text search as data. Nothing is built into a regex.
   if (q) filter.$text = { $search: q }
 
@@ -379,15 +410,25 @@ const getSosById = async (viewer: TokenPayload, id: string) => {
   const isAssigned = sos.assignedVolunteer && String(sos.assignedVolunteer._id) === viewer.id
   const isStaff = viewer.role === Role.ADMIN || viewer.role === Role.NGO
   // The victim also gets the volunteer's task, so the page can offer the rating without another call.
+  // If an admin combined the request into another, the victim sees that one's status and nothing else of it.
   if (isOwner) {
-    return { ...toFullView(sos), task: await TaskService.getVictimSummary(id, viewer.id) }
+    return {
+      ...toFullView(sos),
+      task: await TaskService.getVictimSummary(id, viewer.id),
+      mergedInto: await DuplicateService.mergedStatus(sos.mergedInto),
+    }
   }
   // Staff also see who holds the request and how their task was shown to be finished.
   if (isStaff) return { ...toStaffView(sos), task: await TaskService.getStaffSummary(id) }
   if (isAssigned) return toFullView(sos)
 
   if (viewer.role === Role.VOLUNTEER && sos.status === SosStatus.PENDING) {
-    return toLimitedView(sos)
+    // A volunteer who has an offer for it is also told how many other open requests are flagged close by.
+    const offered = (await TaskService.getStatusFor(id, viewer.id)) === TaskStatus.PENDING
+    return {
+      ...toLimitedView(sos),
+      otherRequestsNearby: offered ? await DuplicateService.nearbySummary(sos) : null,
+    }
   }
   throw new AppError(httpStatus.FORBIDDEN, 'You do not have access to this SOS request')
 }

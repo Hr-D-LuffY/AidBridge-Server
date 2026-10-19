@@ -72,6 +72,14 @@ const sosSchema = new Schema(
     staleAlertedAt: { type: Date },
     // Why the victim resolved it. Absent on requests closed before this existed and on ones an admin closed.
     resolveKind: { type: String, enum: RESOLVE_KIND_VALUES },
+    // Other open requests from other victims, close by and recent, found when this one was created (or when
+    // one of those was). A hint for an admin; dispatch never reads it.
+    possibleDuplicateOf: {
+      type: [{ type: Schema.Types.ObjectId, ref: 'SOSRequest' }],
+      default: [],
+    },
+    // Set when an admin combined this request into another one; it is then closed with `resolveKind: merged`.
+    mergedInto: { type: Schema.Types.ObjectId, ref: 'SOSRequest' },
     // The dispatch engine's bookkeeping (see module/dispatch). Requests that existed before it have none
     // of this; readers fall back to the defaults and the engine fills `nextActionAt` in.
     dispatch: {
@@ -104,6 +112,8 @@ sosSchema.index({ assignedVolunteer: 1, createdAt: -1 })
 sosSchema.index({ createdAt: -1 })
 // The stale job: open requests that have been quiet the longest.
 sosSchema.index({ status: 1, lastConfirmedAt: 1 })
+// Finding the requests that point at one (merge and dismiss pull a link out of every request holding it).
+sosSchema.index({ possibleDuplicateOf: 1 })
 // The dispatch job: pending requests whose next action is due.
 sosSchema.index({ status: 1, 'dispatch.nextActionAt': 1 })
 // `GET /sos?q=`: one text index over the description and address. The description counts double. The
