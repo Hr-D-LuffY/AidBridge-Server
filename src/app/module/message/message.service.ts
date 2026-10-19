@@ -64,6 +64,9 @@ const listMessages = async (viewer: TokenPayload, sosId: string, query: ListMess
   return { items: messages.map(toMessageView), meta: buildMeta({ page, limit }, total) }
 }
 
+const logActivityError = (error: unknown) =>
+  console.error("Could not record the victim's activity:", error)
+
 const sendMessage = async (viewer: TokenPayload, sosId: string, payload: SendMessagePayload) => {
   const access = await getAccess(viewer, sosId)
   if (!access.isParticipant) {
@@ -85,6 +88,10 @@ const sendMessage = async (viewer: TokenPayload, sosId: string, payload: SendMes
     .populate<{ sender: Sender }>('sender', 'name role')
     .lean()
   if (!message) throw new AppError(httpStatus.INTERNAL_SERVER_ERROR, 'Message was not saved')
+
+  // The victim writing is a sign of life: the stale clock starts again.
+  if (viewer.id === access.victimId)
+    await SosService.recordVictimActivity(sosId).catch(logActivityError)
 
   // The other person finds out without opening the request: a notification with who wrote and how it
   // starts. The message is already saved, so this can't fail the send.

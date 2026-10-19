@@ -1,4 +1,5 @@
 import { Schema, model } from 'mongoose'
+import { Collection } from '../../constants/collections'
 import { SosEventType } from '../../constants/dispatch'
 
 const TYPE_VALUES: SosEventType[] = Object.values(SosEventType)
@@ -22,4 +23,4 @@ const sosEventSchema = new Schema(
 
 sosEventSchema.index({ sos: 1, at: 1 })
 
-export const SosEvent = model('SosEvent', sosEventSchema)
+export const SosEvent = model('SosEvent', sosEventSchema, Collection.SOS_EVENTS)

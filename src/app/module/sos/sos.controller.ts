@@ -124,6 +124,17 @@ const closeSos = catchAsync(async (req, res) => {
   })
 })
 
+const confirmSos = catchAsync(async (req, res) => {
+  const { id } = idParamSchema.parse(req.params)
+  const sos = await SosService.confirmStillNeedHelp(getAuthUser(req).id, id)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Thank you. Your SOS request stays open',
+    data: sos,
+  })
+})
+
 const acceptSos = catchAsync(async (req, res) => {
   const { id } = idParamSchema.parse(req.params)
   const result = await SosService.acceptSos(getAuthUser(req).id, id)
@@ -168,6 +179,7 @@ export const SosController = {
   addMedia,
   resolveSos,
   closeSos,
+  confirmSos,
   setPriority,
   acceptSos,
   rejectSos,

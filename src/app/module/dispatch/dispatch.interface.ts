@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import {
+  BOARD_DEFAULT_LIMIT,
+  BOARD_MAX_LIMIT,
   DISPATCH_SETTINGS_LIMITS as LIMITS,
   MAX_DISPATCH_NOTE_LENGTH,
 } from '../../constants/dispatch'
@@ -77,6 +79,33 @@ export const updateSettingsSchema = updateBodySchema(
       LIMITS.setOffWithinMinutes,
       'Critical set-off time',
     ).optional(),
+    staleCheckAfterHours: wholeNumber(
+      LIMITS.staleHours.min,
+      LIMITS.staleHours.max,
+      'Stale check time',
+    ).optional(),
+    staleCheckAssignedAfterHours: wholeNumber(
+      LIMITS.staleHours.min,
+      LIMITS.staleHours.max,
+      'Stale check time for a held request',
+    ).optional(),
+    staleCloseAfterHours: wholeNumber(
+      LIMITS.staleHours.min,
+      LIMITS.staleHours.max,
+      'Stale close time',
+    ).optional(),
+    slaAssignMinutes: partialBlock({
+      critical: minutes(LIMITS.slaMinutes, 'Critical target').optional(),
+      high: minutes(LIMITS.slaMinutes, 'High target').optional(),
+      medium: minutes(LIMITS.slaMinutes, 'Medium target').optional(),
+      low: minutes(LIMITS.slaMinutes, 'Low target').optional(),
+    }).optional(),
+    slaArriveMinutes: partialBlock({
+      critical: minutes(LIMITS.slaMinutes, 'Critical arrival target').optional(),
+      high: minutes(LIMITS.slaMinutes, 'High arrival target').optional(),
+      medium: minutes(LIMITS.slaMinutes, 'Medium arrival target').optional(),
+      low: minutes(LIMITS.slaMinutes, 'Low arrival target').optional(),
+    }).optional(),
     weights: partialBlock({
       distance: weight('Distance weight').optional(),
       reliability: weight('Reliability weight').optional(),
@@ -105,6 +134,19 @@ export const candidatesQuerySchema = z.object({
     .optional(),
 })
 
+// The board pages each lane on its own; `limit` is shared.
+export const boardQuerySchema = z.object({
+  limit: z.coerce
+    .number({ error: 'limit must be a number' })
+    .int()
+    .min(1)
+    .max(BOARD_MAX_LIMIT)
+    .default(BOARD_DEFAULT_LIMIT),
+  unassignedPage: z.coerce.number().int().min(1).default(1),
+  assignedPage: z.coerce.number().int().min(1).default(1),
+  enRoutePage: z.coerce.number().int().min(1).default(1),
+})
+
 export const assignSchema = z.strictObject({
   volunteerId: objectIdSchema,
   // true: the volunteer gets the request at once (already accepted). Default: an offer they can answer.
@@ -125,5 +167,6 @@ export const unassignSchema = z.strictObject({
 
 export type UpdateSettingsPayload = z.infer<typeof updateSettingsSchema>
 export type CandidatesQuery = z.infer<typeof candidatesQuerySchema>
+export type BoardQuery = z.infer<typeof boardQuerySchema>
 export type AssignPayload = z.infer<typeof assignSchema>
 export type UnassignPayload = z.infer<typeof unassignSchema>

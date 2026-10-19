@@ -3,8 +3,10 @@ import { catchAsync } from '../../utils/catchAsync'
 import { getAuthUser } from '../../utils/getAuthUser'
 import { sendResponse } from '../../utils/sendResponse'
 import { idParamSchema } from '../../utils/validation'
+import { BoardService } from './board.service'
 import {
   assignSchema,
+  boardQuerySchema,
   candidatesQuerySchema,
   unassignSchema,
   updateSettingsSchema,
@@ -27,6 +29,16 @@ const updateSettings = catchAsync(async (req, res) => {
     statusCode: httpStatus.OK,
     message: 'Dispatch settings updated successfully',
     data: settings,
+  })
+})
+
+const getBoard = catchAsync(async (req, res) => {
+  const query = boardQuerySchema.parse(req.query)
+
+  sendResponse(res, {
+    statusCode: httpStatus.OK,
+    message: 'Dispatch board retrieved successfully',
+    data: await BoardService.getBoard(query),
   })
 })
 
@@ -101,6 +113,7 @@ const resume = catchAsync(async (req, res) => {
 })
 
 export const DispatchController = {
+  getBoard,
   getSettings,
   updateSettings,
   listCandidates,

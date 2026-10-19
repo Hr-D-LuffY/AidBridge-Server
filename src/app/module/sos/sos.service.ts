@@ -1,6 +1,7 @@
 import httpStatus from 'http-status'
 import { type ClientSession, type QueryFilter, Types } from 'mongoose'
-import { ADMIN_CLOSED_KIND } from '../../constants/analytics'
+import { ADMIN_CLOSED_KIND, MS_PER_MINUTE, RESPONSE_TIME_DECIMALS } from '../../constants/analytics'
+import { Collection } from '../../constants/collections'
 import { AuditAction, AuditTargetType } from '../../constants/audit'
 import { SosEventType } from '../../constants/dispatch'
 import { NotificationType } from '../../constants/notification'
@@ -17,10 +18,16 @@ import {
   SOS_TRANSITIONS,
   SosSort,
   SosStatus,
+  STALE_CLOSE_REASON,
 } from '../../constants/sos'
 import type { Skill } from '../../constants/skill'
-import { ADMIN_CLOSED_NOTE_PREFIX, type TaskProgressStatus, TaskStatus } from '../../constants/task'
-import { PRIORITY_ORDER, type Priority, type ReliefCategory } from '../../constants/relief'
+import {
+  ADMIN_CLOSED_NOTE_PREFIX,
+  STALE_CLOSED_NOTE_PREFIX,
+  type TaskProgressStatus,
+  TaskStatus,
+} from '../../constants/task'
+import { PRIORITY_ORDER, Priority, type ReliefCategory } from '../../constants/relief'
 import { AppError } from '../../errorHelpers/AppError'
 import {
   assertMediaStorageConfigured,
@@ -105,6 +112,10 @@ const toFullView = (sos: SosRecord) => ({
   resolvedBy: sos.resolvedBy ?? null,
   resolveReason: sos.resolveReason ?? null,
   resolveKind: sos.resolveKind ?? null,
+  // The last sign of life, and when the victim was asked "Do you still need help?" (null if not asked, or
+  // answered since). A client shows the question while `confirmationAskedAt` is set.
+  lastConfirmedAt: sos.lastConfirmedAt ?? null,
+  confirmationAskedAt: sos.staleCheckedAt ?? null,
   createdAt: sos.createdAt,
   updatedAt: sos.updatedAt,
 })
@@ -204,6 +215,7 @@ const createSos = async (victimId: string, payload: CreateSosPayload) => {
   }
 
   const created = await SosRequest.create({
+    lastConfirmedAt: new Date(),
     victim: victimId,
     needs,
     requiredSkills,
@@ -396,7 +408,7 @@ const updateSos = async (victimId: string, id: string, payload: UpdateSosPayload
   const updated = await SosRequest.findOneAndUpdate(
     openOwnedFilter(id, victimId),
     {
-      ...(Object.keys(set).length > 0 && { $set: set }),
+      ...stillHereUpdate(set),
       ...(removed.length > 0 && {
         $pull: { media: { _id: { $in: removed.map((item) => item._id) } } },
       }),
@@ -447,7 +459,7 @@ const addMedia = async (victimId: string, id: string, files: Express.Multer.File
       ...openOwnedFilter(id, victimId),
       [`media.${MAX_SOS_MEDIA_ITEMS - files.length}`]: { $exists: false },
     },
-    { $push: { media: { $each: uploaded } } },
+    { ...stillHereUpdate(), $push: { media: { $each: uploaded } } },
     { runValidators: true },
   )
   if (!updated) {
@@ -475,6 +487,35 @@ const uploadAll = async (files: Express.Multer.File[]) => {
   console.error('SOS media upload failed:', failure)
   await Promise.all(uploaded.map(deleteMedia))
   throw new AppError(httpStatus.BAD_GATEWAY, MEDIA_UPLOAD_FAILED_MESSAGE)
+}
+
+// Any sign that the victim is still there: the stale clock starts again and a pending "Do you still need
+// help?" is withdrawn. `extra` is merged into the same $set so the edit and the sign of life are one write.
+const stillHereUpdate = (extra: Record<string, unknown> = {}) => ({
+  $set: { ...extra, lastConfirmedAt: new Date() },
+  $unset: { staleCheckedAt: '', staleAlertedAt: '' },
+})
+
+// "Yes, I still need help": the victim answers the check-in. Also counts as a sign of life on its own,
+// without editing anything.
+const confirmStillNeedHelp = async (victimId: string, id: string) => {
+  await loadOwnedOpenRequest(id, victimId)
+  const updated = await SosRequest.findOneAndUpdate(
+    openOwnedFilter(id, victimId),
+    stillHereUpdate(),
+  )
+  if (!updated) throw new AppError(httpStatus.CONFLICT, RACE_MESSAGE)
+  await SosEventService.record({ sos: id, type: SosEventType.CONFIRMED, actorId: victimId })
+  return getFullView(id)
+}
+
+// The victim wrote in the chat: they are there. Called by the message module; a request that is already
+// finished is left alone.
+const recordVictimActivity = async (id: string) => {
+  await SosRequest.updateOne(
+    { _id: id, status: { $nin: [...SOS_FINISHED_STATUSES] } },
+    stillHereUpdate(),
+  )
 }
 
 // Nothing is deleted: the request moves to `closed` and keeps the victim's reason.
@@ -1126,6 +1167,363 @@ const getTimeline = async (viewer: TokenPayload, id: string, query: TimelineQuer
   return SosEventService.listTimeline(id, query, isStaff)
 }
 
+// --- Stale requests (commit 18): the job in module/dispatch/stale.service drives these -----------
+
+const STILL_OPEN_STATUSES: SosStatus[] = [
+  SosStatus.PENDING,
+  SosStatus.ASSIGNED,
+  SosStatus.ON_THE_WAY,
+]
+const HELD_STATUSES: SosStatus[] = [SosStatus.ASSIGNED, SosStatus.ON_THE_WAY]
+
+// Requests from before the stale clock existed start it now, so deploying this does not make every old
+// request look abandoned at once.
+const startStaleClocks = async (now: Date) => {
+  await SosRequest.updateMany(
+    { status: { $in: STILL_OPEN_STATUSES }, lastConfirmedAt: { $exists: false } },
+    { $set: { lastConfirmedAt: now } },
+  )
+}
+
+export interface StaleRef {
+  id: string
+  victimId: string
+  priority: Priority
+  status: SosStatus
+  lastConfirmedAt: Date
+  staleCheckedAt: Date | null
+}
+
+const toStaleRef = (sos: {
+  _id: Types.ObjectId
+  victim: Types.ObjectId
+  priority: Priority
+  status: SosStatus
+  lastConfirmedAt?: Date | null
+  staleCheckedAt?: Date | null
+}): StaleRef[] =>
+  sos.lastConfirmedAt
+    ? [
+        {
+          id: String(sos._id),
+          victimId: String(sos.victim),
+          priority: sos.priority,
+          status: sos.status,
+          lastConfirmedAt: sos.lastConfirmedAt,
+          staleCheckedAt: sos.staleCheckedAt ?? null,
+        },
+      ]
+    : []
+
+// Open requests that have been quiet past their check time and were not asked yet, oldest first. A pending
+// request and one a volunteer holds have their own cut-offs.
+const listNeedingCheckIn = async (
+  pendingCutoff: Date,
+  heldCutoff: Date,
+  limit: number,
+): Promise<StaleRef[]> => {
+  const found = await SosRequest.find({
+    staleCheckedAt: { $exists: false },
+    $or: [
+      { status: SosStatus.PENDING, lastConfirmedAt: { $lte: pendingCutoff } },
+      { status: { $in: HELD_STATUSES }, lastConfirmedAt: { $lte: heldCutoff } },
+    ],
+  })
+    .sort({ lastConfirmedAt: 1 })
+    .limit(limit)
+    .select('victim priority status lastConfirmedAt staleCheckedAt')
+    .lean()
+  return found.flatMap(toStaleRef)
+}
+
+// Marks the question as asked, only if nothing has changed since it was read: a victim who answered a
+// moment ago keeps their fresh clock. True when this call is the one that asked.
+const markCheckedIn = async (ref: StaleRef, now: Date) => {
+  const marked = await SosRequest.findOneAndUpdate(
+    {
+      _id: ref.id,
+      status: { $in: STILL_OPEN_STATUSES },
+      lastConfirmedAt: ref.lastConfirmedAt,
+      staleCheckedAt: { $exists: false },
+    },
+    { $set: { staleCheckedAt: now } },
+  )
+  return marked !== null
+}
+
+// Requests asked at least `askedBefore` ago and silent since `silentBefore`. Medium and low are closed;
+// high and critical are reported once (those not reported yet are the ones listed).
+const listUnanswered = async (
+  silentBefore: Date,
+  askedBefore: Date,
+  limit: number,
+): Promise<StaleRef[]> => {
+  const found = await SosRequest.find({
+    status: { $in: STILL_OPEN_STATUSES },
+    staleCheckedAt: { $lte: askedBefore },
+    lastConfirmedAt: { $lte: silentBefore },
+    $or: [
+      { priority: { $in: [Priority.MEDIUM, Priority.LOW] } },
+      { priority: { $in: [Priority.HIGH, Priority.CRITICAL] }, staleAlertedAt: { $exists: false } },
+    ],
+  })
+    .sort({ lastConfirmedAt: 1 })
+    .limit(limit)
+    .select('victim priority status lastConfirmedAt staleCheckedAt')
+    .lean()
+  return found.flatMap(toStaleRef)
+}
+
+// Records that staff were told about a quiet high or critical request, once. True for the one caller that did.
+const markStaleAlerted = async (ref: StaleRef, now: Date) => {
+  const marked = await SosRequest.findOneAndUpdate(
+    {
+      _id: ref.id,
+      status: { $in: STILL_OPEN_STATUSES },
+      lastConfirmedAt: ref.lastConfirmedAt,
+      staleAlertedAt: { $exists: false },
+    },
+    { $set: { staleAlertedAt: now } },
+  )
+  return marked !== null
+}
+
+// Closes a request nobody answered for, as the system. Conditional on nothing having changed since it was
+// read, so an answer that arrives at the last moment wins. Answers who held it or an offer for it, or null
+// when the request changed in the meantime (which is not an error).
+const autoCloseStale = async (ref: StaleRef, now: Date) => {
+  return runInTransaction(async (session) => {
+    const closed = await SosRequest.findOneAndUpdate(
+      {
+        _id: ref.id,
+        status: ref.status,
+        lastConfirmedAt: ref.lastConfirmedAt,
+        staleCheckedAt: { $exists: true },
+      },
+      {
+        $set: {
+          status: SosStatus.CLOSED,
+          resolvedBy: ResolvedBy.SYSTEM,
+          resolveKind: ResolveKind.STALE,
+          resolveReason: STALE_CLOSE_REASON,
+          resolvedAt: now,
+        },
+      },
+      { session },
+    )
+    if (!closed) return null
+    return TaskService.cancelOpenTasks(
+      session,
+      ref.id,
+      STALE_CLOSE_REASON,
+      STALE_CLOSED_NOTE_PREFIX,
+    )
+  })
+}
+
+// --- Dispatch board and metrics (commit 19) ---------------------------------------------------------
+
+export interface BoardRow {
+  id: string
+  status: SosStatus
+  priority: Priority
+  needs: ReliefCategory[]
+  address: string | null
+  coordinates: Coordinates
+  createdAt: Date
+  victim: { id: string; name: string }
+  assignedVolunteerId: string | null
+  dispatch: ReturnType<typeof toDispatchView>
+}
+
+// One page of the requests in a status, for a board lane. A lane that waits for a volunteer is ordered most
+// urgent first, then oldest; the others oldest first (the longest-running is the one to look at).
+const listBoardLane = async (
+  status: SosStatus,
+  query: { page: number; limit: number },
+  byPriority: boolean,
+) => {
+  const { skip, limit } = getPagination(query)
+  const filter = { status }
+
+  const loadIds = async () => {
+    if (!byPriority) {
+      const found = await SosRequest.find(filter)
+        .sort({ createdAt: 1, _id: 1 })
+        .skip(skip)
+        .limit(limit)
+        .select('_id')
+        .lean()
+      return found.map((sos) => sos._id)
+    }
+    const rows = await SosRequest.aggregate<{ _id: Types.ObjectId }>([
+      { $match: filter },
+      { $addFields: { rank: { $indexOfArray: [PRIORITY_ORDER, '$priority'] } } },
+      { $sort: { rank: 1, createdAt: 1, _id: 1 } },
+      { $skip: skip },
+      { $limit: limit },
+      { $project: { _id: 1 } },
+    ])
+    return rows.map((row) => row._id)
+  }
+
+  const [ids, total] = await Promise.all([loadIds(), SosRequest.countDocuments(filter)])
+  const found = await SosRequest.find({ _id: { $in: ids } })
+    .populate<{ victim: { _id: Types.ObjectId; name: string } }>('victim', 'name')
+    .lean()
+  const byId = new Map(found.map((sos) => [String(sos._id), sos]))
+  const rows = ids.flatMap((id): BoardRow[] => {
+    const sos = byId.get(String(id))
+    if (!sos) return []
+    return [
+      {
+        id: String(sos._id),
+        status: sos.status,
+        priority: sos.priority,
+        needs: sos.needs,
+        address: sos.address ?? null,
+        coordinates: sos.location.coordinates as Coordinates,
+        createdAt: sos.createdAt,
+        victim: { id: String(sos.victim._id), name: sos.victim.name },
+        assignedVolunteerId: sos.assignedVolunteer ? String(sos.assignedVolunteer) : null,
+        dispatch: toDispatchView(sos.dispatch),
+      },
+    ]
+  })
+  return { rows, total }
+}
+
+export interface SlaTargetsMs {
+  assign: Record<Priority, number>
+  arrive: Record<Priority, number>
+}
+
+// Picks the target for the request's priority inside an aggregation.
+const targetByPriority = (targets: Record<Priority, number>) => ({
+  $arrayElemAt: [
+    PRIORITY_ORDER.map((priority) => targets[priority]),
+    { $indexOfArray: [PRIORITY_ORDER, '$priority'] },
+  ],
+})
+
+const MINUTE_DECIMALS = 10 ** RESPONSE_TIME_DECIMALS
+const toMinutes = (ms: number | undefined) =>
+  ms === undefined ? 0 : Math.round((ms / MS_PER_MINUTE) * MINUTE_DECIMALS) / MINUTE_DECIMALS
+
+// How fast requests raised in the range were taken and reached, from the timeline events: the first
+// `accepted` and the first `completed` of each, minus when the request was raised. Requests from before the
+// timeline existed have no events and are left out of the averages. A request breaches its targets when it
+// was taken or reached later than the target for its priority, or is still waiting past it.
+const getDispatchMetrics = async (range: DateRange, targets: SlaTargetsMs, now: Date) => {
+  const isDate = (field: string) => ({ $eq: [{ $type: field }, 'date'] })
+  const assignTarget = targetByPriority(targets.assign)
+  const arriveTarget = targetByPriority(targets.arrive)
+  const age = { $subtract: [now, '$createdAt'] }
+
+  const [result] = await SosRequest.aggregate<{
+    assign: { avg: number }[]
+    arrive: { avg: number }[]
+    breached: { count: number }[]
+    unserved: { count: number }[]
+  }>([
+    { $match: inRange('createdAt', range) },
+    {
+      $lookup: {
+        from: Collection.SOS_EVENTS,
+        localField: '_id',
+        foreignField: 'sos',
+        pipeline: [
+          { $match: { type: { $in: [SosEventType.ACCEPTED, SosEventType.COMPLETED] } } },
+          { $group: { _id: '$type', at: { $min: '$at' } } },
+        ],
+        as: 'marks',
+      },
+    },
+    {
+      $addFields: {
+        acceptedAt: markTime(SosEventType.ACCEPTED),
+        completedAt: markTime(SosEventType.COMPLETED),
+      },
+    },
+    {
+      $facet: {
+        assign: [
+          { $match: { acceptedAt: { $type: 'date' } } },
+          { $group: { _id: null, avg: { $avg: { $subtract: ['$acceptedAt', '$createdAt'] } } } },
+        ],
+        arrive: [
+          { $match: { completedAt: { $type: 'date' } } },
+          { $group: { _id: null, avg: { $avg: { $subtract: ['$completedAt', '$createdAt'] } } } },
+        ],
+        breached: [
+          {
+            $match: {
+              $expr: {
+                $or: [
+                  {
+                    $cond: [
+                      isDate('$acceptedAt'),
+                      { $gt: [{ $subtract: ['$acceptedAt', '$createdAt'] }, assignTarget] },
+                      {
+                        $and: [
+                          { $eq: ['$status', SosStatus.PENDING] },
+                          { $gt: [age, assignTarget] },
+                        ],
+                      },
+                    ],
+                  },
+                  {
+                    $cond: [
+                      isDate('$completedAt'),
+                      { $gt: [{ $subtract: ['$completedAt', '$createdAt'] }, arriveTarget] },
+                      {
+                        $and: [
+                          {
+                            $in: [
+                              '$status',
+                              [SosStatus.PENDING, SosStatus.ASSIGNED, SosStatus.ON_THE_WAY],
+                            ],
+                          },
+                          { $gt: [age, arriveTarget] },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          { $count: 'count' },
+        ],
+        unserved: [
+          { $match: { status: SosStatus.PENDING, 'dispatch.unserved': true } },
+          { $count: 'count' },
+        ],
+      },
+    },
+  ])
+
+  return {
+    avgTimeToAssignMinutes: toMinutes(result?.assign[0]?.avg),
+    avgTimeToArriveMinutes: toMinutes(result?.arrive[0]?.avg),
+    slaBreachedCount: result?.breached[0]?.count ?? 0,
+    unservedCount: result?.unserved[0]?.count ?? 0,
+  }
+}
+
+// The time of one kind of timeline event in the `marks` the lookup attached, or null.
+const markTime = (type: string) => ({
+  $arrayElemAt: [
+    {
+      $map: {
+        input: { $filter: { input: '$marks', cond: { $eq: ['$$this._id', type] } } },
+        in: '$$this.at',
+      },
+    },
+    0,
+  ],
+})
+
 // --- Questions other modules ask ---------------------------------------------------------------
 
 const viewForTask = (sos: SosRecord, contactVisible: boolean) =>
@@ -1264,6 +1662,16 @@ export const SosService = {
   addMedia,
   resolveSos,
   closeSos,
+  confirmStillNeedHelp,
+  recordVictimActivity,
+  startStaleClocks,
+  listBoardLane,
+  getDispatchMetrics,
+  listNeedingCheckIn,
+  markCheckedIn,
+  listUnanswered,
+  markStaleAlerted,
+  autoCloseStale,
   closeUnfinishedForVictim,
   setPriority,
   acceptSos,

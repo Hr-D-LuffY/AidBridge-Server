@@ -55,6 +55,21 @@ export const approximateCoordinates = ([lng, lat]: Coordinates): Coordinates => 
   return [Math.round(lng * factor) / factor, Math.round(lat * factor) / factor]
 }
 
+const EARTH_RADIUS_METERS = 6_371_000
+const DEGREES_TO_RADIANS = Math.PI / 180
+
+// Straight-line (great-circle) distance between two points, in metres.
+export const distanceMeters = ([lng1, lat1]: Coordinates, [lng2, lat2]: Coordinates) => {
+  const dLat = (lat2 - lat1) * DEGREES_TO_RADIANS
+  const dLng = (lng2 - lng1) * DEGREES_TO_RADIANS
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * DEGREES_TO_RADIANS) *
+      Math.cos(lat2 * DEGREES_TO_RADIANS) *
+      Math.sin(dLng / 2) ** 2
+  return 2 * EARTH_RADIUS_METERS * Math.asin(Math.sqrt(a))
+}
+
 // First stage of an aggregation: nearest first, with the distance in metres written to
 // `distanceField`. Use it instead of nearQuery when you need a total count or the distance —
 // countDocuments() rejects $near. Must be the first stage, and needs the 2dsphere index.

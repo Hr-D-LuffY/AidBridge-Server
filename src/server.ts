@@ -1,9 +1,10 @@
 import app from './app'
 import { config } from './app/config'
-import { DISPATCH_TICK_MS } from './app/constants/dispatch'
+import { DISPATCH_TICK_MS, STALE_TICK_MS } from './app/constants/dispatch'
 import { connectDB, disconnectDB } from './app/lib/db'
 import { registerJob, startScheduler, stopScheduler } from './app/lib/scheduler'
 import { DispatchService } from './app/module/dispatch/dispatch.service'
+import { StaleService } from './app/module/dispatch/stale.service'
 
 const main = async () => {
   await connectDB()
@@ -14,6 +15,11 @@ const main = async () => {
     name: 'dispatch',
     intervalMs: DISPATCH_TICK_MS,
     run: () => DispatchService.runTick(),
+  })
+  registerJob({
+    name: 'stale-requests',
+    intervalMs: STALE_TICK_MS,
+    run: () => StaleService.runStaleCheck(),
   })
   startScheduler()
 

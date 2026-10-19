@@ -29,20 +29,36 @@ export const ResolveKind = {
   RESCUED_ELSEWHERE: 'rescued_elsewhere',
   NO_LONGER_NEEDED: 'no_longer_needed',
   OTHER: 'other',
+  // Never chosen by a person: the system closed a medium or low request nobody answered for (commit 18).
+  STALE: 'stale',
 } as const
 
 export type ResolveKind = (typeof ResolveKind)[keyof typeof ResolveKind]
 
-export const RESOLVE_KIND_PRESET_REASONS: Record<Exclude<ResolveKind, 'other'>, string> = {
+// The kinds a victim may send.
+export const VICTIM_RESOLVE_KINDS = [
+  ResolveKind.SAFE,
+  ResolveKind.RESCUED_ELSEWHERE,
+  ResolveKind.NO_LONGER_NEEDED,
+  ResolveKind.OTHER,
+] as const
+
+export type VictimResolveKind = (typeof VICTIM_RESOLVE_KINDS)[number]
+
+export const RESOLVE_KIND_PRESET_REASONS: Record<Exclude<VictimResolveKind, 'other'>, string> = {
   [ResolveKind.SAFE]: 'I am safe now',
   [ResolveKind.RESCUED_ELSEWHERE]: 'I was helped by someone else',
   [ResolveKind.NO_LONGER_NEEDED]: 'I no longer need help',
 }
 
-// Who closed a request: the victim, or an admin (closing it by hand, or blocking the victim).
+export const STALE_CLOSE_REASON =
+  'Closed automatically: there was no answer to the "Do you still need help?" check'
+
+// Who closed a request: the victim, an admin (by hand, or by blocking the victim), or the system (stale cleanup).
 export const ResolvedBy = {
   VICTIM: 'victim',
   ADMIN: 'admin',
+  SYSTEM: 'system',
 } as const
 
 export type ResolvedBy = (typeof ResolvedBy)[keyof typeof ResolvedBy]

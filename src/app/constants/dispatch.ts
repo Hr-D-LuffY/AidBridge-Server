@@ -36,6 +36,16 @@ export interface DispatchSettingsValues {
     skillMatch: number
     noShowPenalty: number
   }
+  // Stale cleanup (commit 18): hours without a sign of life before the victim is asked "Do you still
+  // need help?" (a pending request / one a volunteer holds), and before an unanswered medium or low
+  // request is closed.
+  staleCheckAfterHours: number
+  staleCheckAssignedAfterHours: number
+  staleCloseAfterHours: number
+  // Service-level targets by priority, in minutes since the request was raised: until a volunteer has taken
+  // it, and until one has arrived (the task is completed). The board and the dashboard measure against them.
+  slaAssignMinutes: Record<Priority, number>
+  slaArriveMinutes: Record<Priority, number>
 }
 
 export const DEFAULT_DISPATCH_SETTINGS: DispatchSettingsValues = {
@@ -52,6 +62,11 @@ export const DEFAULT_DISPATCH_SETTINGS: DispatchSettingsValues = {
   setOffWithinMinutes: 30,
   criticalSetOffWithinMinutes: 15,
   weights: { distance: 0.4, reliability: 0.25, load: 0.1, skillMatch: 0.2, noShowPenalty: 0.05 },
+  staleCheckAfterHours: 6,
+  staleCheckAssignedAfterHours: 12,
+  staleCloseAfterHours: 24,
+  slaAssignMinutes: { critical: 10, high: 30, medium: 90, low: 240 },
+  slaArriveMinutes: { critical: 30, high: 60, medium: 180, low: 480 },
 }
 
 // Escalation level at which a request that is still unanswered is raised one priority step.
@@ -86,6 +101,9 @@ export const SosEventType = {
   SET_OFF_TIMEOUT: 'set_off_timeout',
   BACKED_OUT: 'backed_out',
   CLOSED: 'closed',
+  STILL_NEED_HELP_ASKED: 'still_need_help_asked',
+  CONFIRMED: 'confirmed',
+  STALE_UNANSWERED: 'stale_unanswered',
   UNASSIGNED: 'unassigned',
   PAUSED: 'paused',
   RESUMED: 'resumed',
@@ -109,8 +127,28 @@ export const DISPATCH_SETTINGS_LIMITS = {
   maxRounds: range(1, 10),
   retryIntervalMinutes: range(1, 1440),
   setOffWithinMinutes: range(1, 240),
+  staleHours: range(1, 720),
+  slaMinutes: range(1, 10_080),
   weight: range(0, 1),
 } as const
+
+// A target counts as "at risk" once this much of it has gone.
+export const SLA_AT_RISK_FRACTION = 0.75
+
+// A volunteer's position older than this is shown as stale and ranks lower in dispatch. A volunteer whose
+// position has no time at all (saved before it was recorded) counts as stale.
+export const LOCATION_STALE_MINUTES = 30
+// Taken off a candidate's score when their position is stale (not one of the weights, so they still add up to 1).
+export const STALE_LOCATION_PENALTY = 0.15
+
+export const BOARD_DEFAULT_LIMIT = 20
+export const BOARD_MAX_LIMIT = 100
+
+// How often the stale-request job wakes up (it works in hours, so a few minutes is plenty).
+export const STALE_TICK_MS = 5 * MS_PER_MINUTE
+// A victim always gets at least this long between the check-in and an automatic closure.
+export const STALE_MIN_ANSWER_HOURS = 1
+export const MS_PER_HOUR = 60 * MS_PER_MINUTE
 
 // The five score weights must add up to 1, give or take this much (so 0.1 + 0.2 + 0.7 is fine).
 export const WEIGHT_SUM_TOLERANCE = 0.001

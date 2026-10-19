@@ -52,6 +52,8 @@ const userSchema = new Schema(
     // No default on purpose: a user without a set location is simply absent from nearby searches
     // (the old model defaulted to [0, 0], a point in the Atlantic that every such user shared).
     location: { type: geoPointSchema, default: undefined },
+    // When `location` was last saved (by PUT /auth/me). Dispatch and the board treat an old one as stale.
+    locationUpdatedAt: { type: Date },
     reliabilityScore: { type: Number, default: DEFAULT_RELIABILITY_SCORE, min: 0, max: MAX_RATING },
     // reliabilityScore is ratingSum / totalRatings, kept in step by UserService.recordRating. The sum
     // is stored so the average is recomputed exactly each time instead of drifting through rounding.

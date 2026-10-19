@@ -9,6 +9,7 @@ import { Priority } from '../../constants/relief'
 import { ResolveKind, SosStatus } from '../../constants/sos'
 import type { DateRange } from '../../utils/dateRange'
 import { CampService } from '../camp/camp.service'
+import { DispatchService } from '../dispatch/dispatch.service'
 import { DistributionService } from '../distribution/distribution.service'
 import { IncidentService } from '../incident/incident.service'
 import { SosService } from '../sos/sos.service'
@@ -38,13 +39,14 @@ const toPeriod = ({ startDate, endDate }: DateRange) => ({
 // The admin dashboard. Field names are the old API's, which the client's charts will read. The five
 // reads are independent, so they run together.
 const getDashboard = async (range: DateRange) => {
-  const [counts, avgResponseTime, volunteerActivity, distributionByItem, volunteerCount] =
+  const [counts, avgResponseTime, volunteerActivity, distributionByItem, volunteerCount, dispatch] =
     await Promise.all([
       SosService.countByStatusAndPriority(range),
       TaskService.averageResponseMinutes(range),
       TaskService.topVolunteersByCompleted(range, TOP_VOLUNTEERS_LIMIT),
       DistributionService.totalsByItem(range, TOP_DISTRIBUTED_ITEMS_LIMIT),
       UserService.countActiveVolunteers(),
+      DispatchService.getMetrics(range),
     ])
 
   return {
@@ -62,6 +64,8 @@ const getDashboard = async (range: DateRange) => {
       counts.byResolveKind,
     ),
     avgResponseTime,
+    // How fast requests were taken and reached, and how many broke their targets (§12h).
+    ...dispatch,
     volunteerActivity,
     distributionByItem,
   }

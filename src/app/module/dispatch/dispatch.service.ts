@@ -25,6 +25,7 @@ import { isOnDuty } from '../../lib/availability'
 import { matchSkills, wantedSkills } from '../../lib/skills'
 import { runInTransaction } from '../../lib/transaction'
 import type { TokenPayload } from '../../utils/jwt'
+import type { DateRange } from '../../utils/dateRange'
 import { buildMeta, getPagination } from '../../utils/pagination'
 import { AuditService } from '../audit/audit.service'
 import { NotificationService } from '../notification/notification.service'
@@ -48,6 +49,7 @@ import {
   escalate,
   firstOfferAt,
   flattenSettingsPayload,
+  isLocationStale,
   isSetOffOverdue,
   offerWindowMs,
   onlyChanged,
@@ -85,6 +87,13 @@ interface SettingsDocument {
   setOffWithinMinutes: number
   criticalSetOffWithinMinutes: number
   weights?: Partial<DispatchSettingsValues['weights']> | null
+  // Added in commit 18: a settings document saved before then has none of the three.
+  staleCheckAfterHours?: number
+  staleCheckAssignedAfterHours?: number
+  staleCloseAfterHours?: number
+  // Added in commit 19.
+  slaAssignMinutes?: Partial<DispatchSettingsValues['slaAssignMinutes']> | null
+  slaArriveMinutes?: Partial<DispatchSettingsValues['slaArriveMinutes']> | null
 }
 
 // Only the settings fields leave the document (not its id, key or timestamps).
@@ -103,6 +112,12 @@ const toSettingsValues = (doc: SettingsDocument): DispatchSettingsValues => ({
   setOffWithinMinutes: doc.setOffWithinMinutes,
   criticalSetOffWithinMinutes: doc.criticalSetOffWithinMinutes,
   weights: { ...DEFAULT_DISPATCH_SETTINGS.weights, ...doc.weights },
+  staleCheckAfterHours: doc.staleCheckAfterHours ?? DEFAULT_DISPATCH_SETTINGS.staleCheckAfterHours,
+  staleCheckAssignedAfterHours:
+    doc.staleCheckAssignedAfterHours ?? DEFAULT_DISPATCH_SETTINGS.staleCheckAssignedAfterHours,
+  staleCloseAfterHours: doc.staleCloseAfterHours ?? DEFAULT_DISPATCH_SETTINGS.staleCloseAfterHours,
+  slaAssignMinutes: { ...DEFAULT_DISPATCH_SETTINGS.slaAssignMinutes, ...doc.slaAssignMinutes },
+  slaArriveMinutes: { ...DEFAULT_DISPATCH_SETTINGS.slaArriveMinutes, ...doc.slaArriveMinutes },
 })
 
 const isDuplicateKey = (error: unknown) =>
@@ -230,6 +245,7 @@ const handleStuckAccepted = async (settings: DispatchSettingsValues, now: Date) 
 
 // A volunteer who could be given the request, with what an admin needs to see about them.
 export interface Eligible extends Candidate {
+  locationUpdatedAt: Date | null
   name: string
   phone: string | null
   skills: Skill[]
@@ -274,6 +290,8 @@ const rankEligible = async (
         reliabilityScore: row.reliabilityScore,
         activeTasks,
         noShowCount: row.noShowCount ?? 0,
+        locationUpdatedAt: row.locationUpdatedAt ?? null,
+        staleLocation: isLocationStale(row.locationUpdatedAt, now),
         matchedSkills: matched.length,
         matchedSkillList: matched,
       },
@@ -571,12 +589,15 @@ const listCandidates = async (id: string, query: CandidatesQuery) => {
         load: rounded(parts.load),
         skillMatch: rounded(parts.skillMatch),
         noShow: rounded(parts.noShow),
+        staleLocation: parts.staleLocation,
       },
       activeTasks: candidate.activeTasks,
       noShowCount: candidate.noShowCount,
       reliabilityScore: candidate.reliabilityScore,
       skills: candidate.skills,
       matchedSkills: candidate.matchedSkillList,
+      locationUpdatedAt: candidate.locationUpdatedAt,
+      locationStale: candidate.staleLocation,
       languages: candidate.languages,
     }
   })
@@ -838,6 +859,20 @@ const setPaused = async (admin: TokenPayload, id: string, paused: boolean) => {
   return SosService.getStaffView(id)
 }
 
+// Dispatch numbers for the dashboard, measured against the service targets in the settings.
+const getMetrics = async (range: DateRange) => {
+  const settings = await getSettings()
+  const toMs = (minutes: Record<Priority, number>) =>
+    Object.fromEntries(
+      Object.entries(minutes).map(([priority, value]) => [priority, value * MS_PER_MINUTE]),
+    ) as Record<Priority, number>
+  return SosService.getDispatchMetrics(
+    range,
+    { assign: toMs(settings.slaAssignMinutes), arrive: toMs(settings.slaArriveMinutes) },
+    new Date(),
+  )
+}
+
 // --- The job -------------------------------------------------------------------------------------
 
 // One pass of the dispatch job (the scheduler calls it every minute). Each request is handled in its own
@@ -867,6 +902,7 @@ const runTick = async (now: Date = new Date()) => {
 export const DispatchService = {
   getSettings,
   getSettingsView,
+  getMetrics,
   updateSettings,
   listCandidates,
   assign,

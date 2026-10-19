@@ -62,6 +62,14 @@ const sosSchema = new Schema(
     resolvedAt: { type: Date },
     resolvedBy: { type: String, enum: RESOLVED_BY_VALUES },
     resolveReason: { type: String, trim: true, maxlength: MAX_SOS_RESOLVE_REASON_LENGTH },
+    // The last sign the victim is still there: set on create, on an edit, on a chat message and on "Yes, I
+    // still need help". The stale job counts hours from it. Requests from before it existed get it on the
+    // job's first pass.
+    lastConfirmedAt: { type: Date },
+    // When the victim was asked "Do you still need help?" (cleared by any sign of life), and when staff were
+    // told about a high or critical request that stayed unanswered.
+    staleCheckedAt: { type: Date },
+    staleAlertedAt: { type: Date },
     // Why the victim resolved it. Absent on requests closed before this existed and on ones an admin closed.
     resolveKind: { type: String, enum: RESOLVE_KIND_VALUES },
     // The dispatch engine's bookkeeping (see module/dispatch). Requests that existed before it have none
@@ -94,6 +102,8 @@ sosSchema.index({ victim: 1, createdAt: -1 })
 // A volunteer's list of the requests they took, newest first, and the staff list with no filter.
 sosSchema.index({ assignedVolunteer: 1, createdAt: -1 })
 sosSchema.index({ createdAt: -1 })
+// The stale job: open requests that have been quiet the longest.
+sosSchema.index({ status: 1, lastConfirmedAt: 1 })
 // The dispatch job: pending requests whose next action is due.
 sosSchema.index({ status: 1, 'dispatch.nextActionAt': 1 })
 // `GET /sos?q=`: one text index over the description and address. The description counts double. The

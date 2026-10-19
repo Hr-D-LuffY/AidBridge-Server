@@ -19,6 +19,7 @@ export const AuditAction = {
   BROADCAST_SENT: 'broadcast_sent',
   DISPATCH_SETTINGS_CHANGED: 'dispatch_settings_changed',
   SOS_CLOSED: 'sos_closed',
+  SOS_AUTO_CLOSED: 'sos_auto_closed',
   SOS_OFFERED: 'sos_offered',
   SOS_ASSIGNED: 'sos_assigned',
   SOS_UNASSIGNED: 'sos_unassigned',

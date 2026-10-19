@@ -34,6 +34,21 @@ const dispatchSettingsSchema = new Schema(
       skillMatch: positive(D.weights.skillMatch),
       noShowPenalty: positive(D.weights.noShowPenalty),
     },
+    staleCheckAfterHours: minutes(D.staleCheckAfterHours),
+    staleCheckAssignedAfterHours: minutes(D.staleCheckAssignedAfterHours),
+    staleCloseAfterHours: minutes(D.staleCloseAfterHours),
+    slaAssignMinutes: {
+      critical: minutes(D.slaAssignMinutes.critical),
+      high: minutes(D.slaAssignMinutes.high),
+      medium: minutes(D.slaAssignMinutes.medium),
+      low: minutes(D.slaAssignMinutes.low),
+    },
+    slaArriveMinutes: {
+      critical: minutes(D.slaArriveMinutes.critical),
+      high: minutes(D.slaArriveMinutes.high),
+      medium: minutes(D.slaArriveMinutes.medium),
+      low: minutes(D.slaArriveMinutes.low),
+    },
   },
   { timestamps: true, versionKey: false },
 )

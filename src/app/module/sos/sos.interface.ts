@@ -10,6 +10,7 @@ import {
   ResolveKind,
   SosSort,
   SosStatus,
+  VICTIM_RESOLVE_KINDS,
 } from '../../constants/sos'
 import { MAX_REQUIRED_SKILLS, Skill } from '../../constants/skill'
 import { coordinatesSchema, nearbyQueryShape } from '../../lib/geo'
@@ -94,8 +95,8 @@ const resolveReasonSchema = z
 export const resolveSosSchema = z
   .strictObject({
     kind: z
-      .enum(ResolveKind, {
-        error: `Kind must be one of: ${Object.values(ResolveKind).join(', ')}`,
+      .enum(VICTIM_RESOLVE_KINDS, {
+        error: `Kind must be one of: ${VICTIM_RESOLVE_KINDS.join(', ')}`,
       })
       .default(ResolveKind.OTHER),
     resolveReason: resolveReasonSchema.optional(),

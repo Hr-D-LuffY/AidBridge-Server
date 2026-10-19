@@ -5,6 +5,8 @@ import { DispatchController } from './dispatch.controller'
 
 // Mounted at /dispatch: the settings.
 const settingsRouter = Router()
+// Admins steer; NGOs look (read-only).
+settingsRouter.get('/board', auth(Role.ADMIN, Role.NGO), DispatchController.getBoard)
 settingsRouter.get('/settings', auth(Role.ADMIN), DispatchController.getSettings)
 settingsRouter.put('/settings', auth(Role.ADMIN), DispatchController.updateSettings)
 

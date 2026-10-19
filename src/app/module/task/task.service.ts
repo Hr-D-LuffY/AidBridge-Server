@@ -1,5 +1,5 @@
 import httpStatus from 'http-status'
-import type { ClientSession, QueryFilter, Types } from 'mongoose'
+import mongoose, { type ClientSession, type QueryFilter, type Types } from 'mongoose'
 import { type OfferSource, SosEventType } from '../../constants/dispatch'
 import {
   MAX_ACTIVE_TASKS_PER_VOLUNTEER,
@@ -462,6 +462,39 @@ const afterOfferDeclined = async (sosId: string, volunteerId: string, now: Date)
   if ((await countLiveOffers(sosId, now)) === 0) await SosService.scheduleDispatchNow(sosId)
 }
 
+// How many offers are still open on each of these requests (for the dispatch board).
+const countLiveOffersBySos = async (sosIds: string[], now: Date) => {
+  if (sosIds.length === 0) return new Map<string, number>()
+  const rows = await Task.aggregate<{ _id: Types.ObjectId; count: number }>([
+    {
+      $match: {
+        sosRequest: { $in: sosIds.map((id) => new mongoose.Types.ObjectId(id)) },
+        status: TaskStatus.PENDING,
+        offerExpiresAt: { $gt: now },
+      },
+    },
+    { $group: { _id: '$sosRequest', count: { $sum: 1 } } },
+  ])
+  return new Map(rows.map((row) => [String(row._id), row.count]))
+}
+
+// The live task (accepted or on the way) on each of these requests, for the dispatch board.
+const listActiveBySos = async (sosIds: string[]) => {
+  if (sosIds.length === 0) return new Map<string, { volunteer: string; acceptedAt: Date | null }>()
+  const tasks = await Task.find({
+    sosRequest: { $in: sosIds },
+    status: { $in: [...TASK_ACTIVE_STATUSES] },
+  })
+    .select('sosRequest volunteer acceptedAt')
+    .lean()
+  return new Map(
+    tasks.map((task) => [
+      String(task.sosRequest),
+      { volunteer: String(task.volunteer), acceptedAt: task.acceptedAt ?? null },
+    ]),
+  )
+}
+
 // Whether the volunteer has a part in the request: an open offer, or a task they took on. Declined and
 // expired offers do not count. Decides who may read its timeline.
 const hasInvolvement = async (sosId: string, volunteerId: string) => {
@@ -743,5 +776,7 @@ export const TaskService = {
   cancelOffers,
   listAcceptedBefore,
   afterOfferDeclined,
+  countLiveOffersBySos,
+  listActiveBySos,
   hasInvolvement,
 }

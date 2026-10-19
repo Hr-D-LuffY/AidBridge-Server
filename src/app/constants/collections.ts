@@ -3,4 +3,5 @@
 export const Collection = {
   USERS: 'users',
   SOS_REQUESTS: 'sosrequests',
+  SOS_EVENTS: 'sosevents',
 } as const

@@ -11,7 +11,7 @@ import type { Skill } from '../../constants/skill'
 import { BLOCKED_CLOSE_REASON } from '../../constants/user'
 import { AppError } from '../../errorHelpers/AppError'
 import { isOnDuty } from '../../lib/availability'
-import { geoNearStage, type NearbyQuery } from '../../lib/geo'
+import { type Coordinates, geoNearStage, type NearbyQuery } from '../../lib/geo'
 import { runInTransaction } from '../../lib/transaction'
 import { type DateRange, inRange } from '../../utils/dateRange'
 import type { TokenPayload } from '../../utils/jwt'
@@ -52,6 +52,7 @@ export const toFullProfile = (user: UserDocument) => ({
   location: user.location
     ? { type: user.location.type, coordinates: user.location.coordinates }
     : null,
+  locationUpdatedAt: user.locationUpdatedAt ?? null,
   // Only an admin or the user themself gets this profile, and a blocked user cannot read their own.
   // Volunteer profile (empty and null for everyone else). `isOnDuty` is the effective state: the
   // availability switch AND an unexpired "on duty until".
@@ -347,6 +348,7 @@ export interface DispatchCandidateRow {
   reliabilityScore: number
   skills?: Skill[]
   noShowCount?: number
+  locationUpdatedAt?: Date | null
   isAvailable: boolean
   onDutyUntil?: Date | null
 }
@@ -377,6 +379,7 @@ const findDispatchCandidates = (nearby: NearbyQuery, excludeIds: Types.ObjectId[
         reliabilityScore: 1,
         skills: 1,
         noShowCount: 1,
+        locationUpdatedAt: 1,
         isAvailable: 1,
         onDutyUntil: 1,
       },
@@ -403,6 +406,24 @@ const getAssignableVolunteer = async (id: string) => {
     : null
 }
 
+// Where these volunteers last said they were, for the dispatch board. Only admin and NGO responses ever
+// carry it; the caller decides when a position is too old to trust.
+const getPositions = async (ids: string[]) => {
+  const users = await User.find({ _id: { $in: ids } })
+    .select('name location locationUpdatedAt')
+    .lean()
+  return new Map(
+    users.map((user) => [
+      String(user._id),
+      {
+        name: user.name,
+        coordinates: (user.location?.coordinates as Coordinates | undefined) ?? null,
+        locationUpdatedAt: user.locationUpdatedAt ?? null,
+      },
+    ]),
+  )
+}
+
 // Admins and NGOs who can be told something needs a human (a request nobody could take).
 const listStaffIds = async () => {
   const staff = await User.find({
@@ -427,6 +448,7 @@ const countRegistered = (range: DateRange) =>
 export const UserService = {
   findDispatchCandidates,
   getAssignableVolunteer,
+  getPositions,
   listStaffIds,
   incrementNoShow,
   getNotificationTargets,

@@ -3,7 +3,9 @@ import {
   METERS_PER_KM,
   MS_PER_MINUTE,
   NO_SHOW_PENALTY_CAP,
+  LOCATION_STALE_MINUTES,
   PRIORITY_BUMP_LEVEL,
+  STALE_LOCATION_PENALTY,
   WEIGHT_SUM_TOLERANCE,
 } from '../../constants/dispatch'
 import { PRIORITY_ORDER, Priority } from '../../constants/relief'
@@ -98,6 +100,11 @@ export const escalate = (
   }
 }
 
+// A volunteer's position is stale when it is older than LOCATION_STALE_MINUTES, or has no time recorded
+// (it was saved before the time was kept, so nobody can say how old it is).
+export const isLocationStale = (updatedAt: Date | null | undefined, now: Date) =>
+  !updatedAt || now.getTime() - updatedAt.getTime() > LOCATION_STALE_MINUTES * MS_PER_MINUTE
+
 export interface Candidate {
   id: string
   distanceMeters: number
@@ -106,6 +113,8 @@ export interface Candidate {
   noShowCount: number
   // How many of the skills the request wants this volunteer has.
   matchedSkills: number
+  // Their last position is old, or has no time at all.
+  staleLocation: boolean
 }
 
 export interface RankContext {
@@ -120,6 +129,8 @@ export interface ScoreParts {
   load: number
   skillMatch: number
   noShow: number
+  // 1 when the volunteer's position is stale (a penalty), else 0.
+  staleLocation: number
 }
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value))
@@ -133,6 +144,7 @@ export const scoreParts = (candidate: Candidate, context: RankContext): ScorePar
   skillMatch:
     context.wantedSkills > 0 ? clamp01(candidate.matchedSkills / context.wantedSkills) : 0,
   noShow: clamp01(candidate.noShowCount / NO_SHOW_PENALTY_CAP),
+  staleLocation: candidate.staleLocation ? 1 : 0,
 })
 
 export const scoreCandidate = (
@@ -146,7 +158,8 @@ export const scoreCandidate = (
     weights.reliability * parts.reliability +
     weights.load * parts.load +
     weights.skillMatch * parts.skillMatch -
-    weights.noShowPenalty * parts.noShow
+    weights.noShowPenalty * parts.noShow -
+    STALE_LOCATION_PENALTY * parts.staleLocation
   )
 }
 
@@ -234,6 +247,21 @@ export const validateSettings = (values: DispatchSettingsValues): string[] => {
   const sum = Object.values(values.weights).reduce((total, weight) => total + weight, 0)
   if (Math.abs(sum - 1) > WEIGHT_SUM_TOLERANCE) {
     problems.push(`The score weights must add up to 1 (they add up to ${sum.toFixed(3)})`)
+  }
+  for (const priority of Object.keys(
+    values.slaAssignMinutes,
+  ) as (keyof typeof values.slaAssignMinutes)[]) {
+    if (values.slaArriveMinutes[priority] < values.slaAssignMinutes[priority]) {
+      problems.push(
+        `The arrival target for ${priority} requests cannot be shorter than the target for a volunteer to take them`,
+      )
+    }
+  }
+  const slowestCheck = Math.max(values.staleCheckAfterHours, values.staleCheckAssignedAfterHours)
+  if (values.staleCloseAfterHours <= slowestCheck) {
+    problems.push(
+      'Requests must stay open longer before being closed than before the victim is asked if they still need help',
+    )
   }
   return problems
 }

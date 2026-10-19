@@ -169,6 +169,7 @@ const updateMe = async (viewer: TokenPayload, payload: UpdateMePayload) => {
         languages,
         onDutyUntil,
         location: location && toGeoPoint(location),
+        locationUpdatedAt: location ? new Date() : undefined,
       },
     },
     { returnDocument: 'after', runValidators: true },

@@ -41,6 +41,9 @@ export const NotificationType = {
   SOS_UNSERVED: 'sos_unserved',
   TASK_ASSIGNED: 'task_assigned',
   SOS_CLOSED_BY_ADMIN: 'sos_closed_by_admin',
+  SOS_STILL_NEED_HELP: 'sos_still_need_help',
+  SOS_CLOSED_STALE: 'sos_closed_stale',
+  SOS_STALE_UNANSWERED: 'sos_stale_unanswered',
 } as const
 
 export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType]
@@ -137,6 +140,25 @@ export const NOTIFICATION_TYPE_META: Record<NotificationType, NotificationTypeMe
   [NotificationType.SOS_CLOSED_BY_ADMIN]: {
     category: NotificationCategory.SAFETY,
     emailable: true,
+    mandatory: true,
+  },
+  // "Do you still need help?" to the victim of a request that has been quiet for hours. Mandatory and
+  // emailed by default (category safety): silence can mean someone cannot answer.
+  [NotificationType.SOS_STILL_NEED_HELP]: {
+    category: NotificationCategory.SAFETY,
+    emailable: true,
+    mandatory: true,
+  },
+  // The system closed a medium or low request nobody answered for (to the victim and the volunteers).
+  [NotificationType.SOS_CLOSED_STALE]: {
+    category: NotificationCategory.SAFETY,
+    emailable: true,
+    mandatory: true,
+  },
+  // To admins and NGOs: a high or critical request is quiet. It is never closed automatically.
+  [NotificationType.SOS_STALE_UNANSWERED]: {
+    category: NotificationCategory.SAFETY,
+    emailable: false,
     mandatory: true,
   },
   // To admins and NGOs: nobody could be found for a request. Mandatory, not emailed.
